@@ -280,11 +280,32 @@ The operator follows the patterns of the liken-sh operators
   client reads the in-cluster service account, lists, watches with
   `?watch=true&allowWatchBookmarks=true`, and applies status. A dropped
   watch or a `410 Gone` starts a new list.
-- A watch event only wakes the reconcile loop, through a channel with a
-  buffer of one. Each pass lists `ClusterProject`s and `Check`s, reconciles
-  each one, and stops the probes of `Check`s that are gone. A 30-second
-  ticker also wakes the loop. A pass calls the Healthchecks management API
-  only when a spec, a CronJob schedule, or a channel list changed.
+- Each watch keeps its collection in a store in memory, keyed by
+  namespace/name. The first list fills the store, and every list
+  replaces it, so an object deleted while a stream was down is gone
+  from it. `ADDED` and `MODIFIED` replace an object, and `DELETED`
+  removes it, in the order the events arrive. A `BOOKMARK` moves only
+  the resume version. Every store has its first list before the first
+  pass.
+- A store holds each object trimmed to the operator's Go type for its
+  collection, so a Job keeps its metadata, owner references, and status,
+  and drops its pod template and managedFields. An object that does not
+  decode stays out of the store, and an older copy under its key leaves
+  it. The rest of the list or the stream applies. The operator writes one
+  line for each object and error.
+- An event changes its store and then wakes the reconcile loop, through
+  a channel with a buffer of one. Each pass reads `ClusterProject`s,
+  `Check`s, CronJobs, and Jobs from the stores, with no request to the
+  API server, reconciles each one, and stops the probes of `Check`s that
+  are gone. A 30-second ticker also wakes the loop, for the parts of a
+  pass that time moves: a backoff that ends, and the heartbeat. A pass
+  calls the Healthchecks management API only when a spec, a CronJob
+  schedule, or a channel list changed.
+- A pass reads a Secret by name from the API server, and writes
+  finalizers and status there. A finalizer patch states the
+  `resourceVersion` from the store. When the store is behind, the patch
+  gets `409 Conflict`, and the pass leaves the object alone. The newer
+  version's event wakes the next pass, which reads it from the store.
 - The operator watches Jobs in all namespaces and matches each Job to a
   `Check` by owner reference.
 - `http` and `tls` probes run from one timer heap in one goroutine. Each

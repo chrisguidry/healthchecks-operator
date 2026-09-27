@@ -39,3 +39,15 @@ coverage-report: coverage.out
 
 coverage.out:
 	$(MAKE) test-go
+
+# e2e is not part of test: it needs Docker and kubectl, and it stands
+# up its own Kubernetes cluster and Healthchecks instance in
+# containers, which the coverage gate above does not. It runs as its
+# own job in CI. See e2e/run.sh for what it proves.
+#
+# The timeout bounds the whole run from outside it: run.sh's own
+# assertions each carry their own, shorter timeout, but this is the
+# backstop if one of them cannot fail on its own.
+.PHONY: e2e
+e2e:
+	timeout 10m bash e2e/run.sh

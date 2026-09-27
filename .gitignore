@@ -4,3 +4,8 @@
 # on every run.
 /coverage.out
 /coverage.html
+
+# e2e/run.sh's own workdir: a kubeconfig and the operator's log, one
+# subdirectory per run. It lives under the repository, not /tmp, so it
+# lands on disk even when /tmp is a tmpfs.
+/.e2e/

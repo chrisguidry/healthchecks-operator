@@ -1,0 +1,98 @@
+# One Check per probe kind, plus the workloads a cronJob Check reports
+# on. run.sh triggers Jobs from the CronJobs below instead of waiting
+# for their schedules.
+apiVersion: v1
+kind: Namespace
+metadata: {name: example}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: probe-token, namespace: example}
+stringData: {header: "Bearer not-a-real-token"}
+---
+# Passes: a redirect to the login page, then the login page itself,
+# read past a header the Secret above supplies.
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata: {name: healthchecks-ui, namespace: example}
+spec:
+  projectRef: {kind: ClusterProject, name: e2e}
+  description: The Healthchecks login page answers
+  tags: [e2e, http]
+  grace: 2m
+  http:
+    interval: 1m
+    requests:
+      - url: http://hc-e2e-healthchecks:8000/
+        expect: {status: [302], headers: {Location: /accounts/login/}}
+      - url: http://hc-e2e-healthchecks:8000/accounts/login/
+        headers:
+          - {name: Authorization, valueFrom: {secretKeyRef: {name: probe-token, key: header}}}
+        expect: {status: [200], bodyContains: "Log In"}
+---
+# Fails: the login page never contains this text, so Passing stays
+# False with that text in the message.
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata: {name: broken-page, namespace: example}
+spec:
+  projectRef: {kind: ClusterProject, name: e2e}
+  http:
+    interval: 1m
+    requests:
+      - url: http://hc-e2e-healthchecks:8000/accounts/login/
+        expect: {status: [200], bodyContains: "this text is not on the page"}
+---
+# Fails: the cluster's API server serves a certificate the operator's
+# trust store does not recognize, so verification itself fails.
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata: {name: kubernetes-api-cert, namespace: example}
+spec:
+  projectRef: {kind: ClusterProject, name: e2e}
+  tls: {interval: 1m, host: kubernetes.default.svc, minRemaining: 24h}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: backup, namespace: example}
+spec:
+  schedule: "* * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers: [{name: work, image: busybox:1.36, command: [sh, -c, "sleep 5"]}]
+---
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata: {name: backup, namespace: example}
+spec:
+  projectRef: {kind: ClusterProject, name: e2e}
+  cronJob: {name: backup}
+---
+# @hourly must arrive at Healthchecks as "0 * * * *": cronsim, which
+# Healthchecks parses schedules with, rejects the macro outright.
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: flaky, namespace: example}
+spec:
+  schedule: "@hourly"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          containers: [{name: work, image: busybox:1.36, command: [sh, -c, "echo boom; exit 3"]}]
+---
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata: {name: flaky, namespace: example}
+spec:
+  projectRef: {kind: ClusterProject, name: e2e}
+  cronJob: {name: flaky}

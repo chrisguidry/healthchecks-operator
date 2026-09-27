@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -72,6 +73,8 @@ type harness struct {
 	clock *testClock
 	log   *syncBuffer
 	c     *controller
+	// watching is the controller whose watches the harness runs.
+	watching *controller
 	// calls counts the requests that reached the management API.
 	calls *atomic.Int32
 	// pushover is the ID of the channel the project names.
@@ -141,8 +144,40 @@ func (h *harness) refuse(method, body string) {
 	h.refusal.Store(&[2]string{method, body})
 }
 
+// pass runs one pass once the controller's stores hold what the fake
+// API server holds, so a test's change reaches the pass the way a watch
+// event would. The first pass lists and starts the watches.
 func (h *harness) pass() {
+	h.t.Helper()
+	h.watch()
+	eventually(h.t, "the stores to hold the cluster", h.synced)
 	h.c.pass(h.t.Context())
+}
+
+// watch lists and starts the watches of the current controller, until
+// the test ends, once for each controller.
+func (h *harness) watch() {
+	h.t.Helper()
+	if h.watching == h.c {
+		return
+	}
+	h.watching = h.c
+	versions, err := h.c.list(h.t.Context())
+	mustSucceed(h.t, err)
+	var running sync.WaitGroup
+	h.c.watch(h.t.Context(), &running, versions)
+	h.t.Cleanup(running.Wait)
+}
+
+// synced reports whether every store holds each object at the version
+// the fake API server holds.
+func (h *harness) synced() bool {
+	for resource, watch := range h.c.watches {
+		if !maps.Equal(storedVersions(h.t, watch.store), h.api.versions(resource)) {
+			return false
+		}
+	}
+	return true
 }
 
 // runProbes runs the controller's probe schedule until the test ends.

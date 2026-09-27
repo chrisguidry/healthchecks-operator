@@ -142,8 +142,9 @@ func (c *controller) reconcileCheck(ctx context.Context, check *Check, w *world)
 	if v.ready() && !check.Metadata.holds(checkFinalizer) {
 		err := c.client.setFinalizers(ctx, checksResource, state.namespace, state.name, check.Metadata.ResourceVersion, check.Metadata.withFinalizer(checkFinalizer), nil)
 		if errors.Is(err, errConflict) || errors.Is(err, errNotFound) {
-			// The Check changed or went since this pass read it. The next
-			// pass reads it again.
+			// The Check changed or went since the store held it. The
+			// change's event updates the store and wakes the next pass,
+			// which reads the newer Check. Nothing retries before then.
 			return
 		}
 		if err != nil {

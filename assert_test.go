@@ -4,6 +4,7 @@ package main
 // test with the value it read and the value it wanted.
 
 import (
+	"maps"
 	"testing"
 	"time"
 )
@@ -23,6 +24,13 @@ func mustSucceed(t *testing.T, err error) {
 func mustMatch[T comparable](t *testing.T, got, want T) {
 	t.Helper()
 	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func mustMatchMap[K, V comparable](t *testing.T, got, want map[K]V) {
+	t.Helper()
+	if !maps.Equal(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }

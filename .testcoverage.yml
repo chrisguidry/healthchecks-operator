@@ -12,7 +12,7 @@ threshold:
   # go test never calls main(), and the part of run() after the
   # in-cluster config runs only in a pod, so those statements never
   # count as covered.
-  total: 91
+  total: 92
 
 exclude:
   paths:

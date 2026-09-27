@@ -243,3 +243,31 @@ func TestACheckMadeAgainUnderItsNameStartsOver(t *testing.T) {
 	stored, _ := h.hc.Check("example-website")
 	mustMatch(t, h.check("example", "website").Status.UUID, stored.UUID)
 }
+
+// A pass that holds an old version of a Check gets a 409 on the
+// finalizer patch, and leaves the Check alone without a retry. The
+// newer version's event reaches the store, and the pass after it adds
+// the finalizer.
+func TestAConflictWaitsForTheNewerCheck(t *testing.T) {
+	h := startHarness(t)
+	h.api.create(checksResource, httpCheck("example", "website", "https://example.com/"))
+	h.watch()
+	eventually(t, "the store to hold the Check", h.synced)
+	store := h.c.watches[checksResource].store
+	stale := store.snapshot()[0]
+	h.editCheck("example", "website", func(spec map[string]any) { spec["description"] = "The website" })
+	eventually(t, "the store to hold the edit", h.synced)
+	store.put("example/website", stale)
+	path := checksResource.path("example", "website")
+
+	h.c.pass(t.Context())
+	refused := h.api.requestCount("PATCH", path, false)
+	unchanged := h.check("example", "website").Metadata.holds(checkFinalizer)
+	h.editCheck("example", "website", func(spec map[string]any) { spec["description"] = "Our website" })
+	h.pass()
+
+	mustMatch(t, refused, 1)
+	mustMatch(t, unchanged, false)
+	mustMatch(t, h.api.requestCount("PATCH", path, false), 2)
+	mustMatch(t, h.check("example", "website").Metadata.holds(checkFinalizer), true)
+}

@@ -1,10 +1,12 @@
 package main
 
 // The operator's loop is level-triggered. A watch event or the backstop
-// ticker wakes it, and each pass lists every ClusterProject, Check,
-// CronJob, and Job, then reconciles each object against what the
-// operator holds in memory. A lost event costs at most one tick, and a
-// restarted operator starts correct.
+// ticker wakes it, and each pass reads every ClusterProject, Check,
+// CronJob, and Job from the watches' stores, then reconciles each
+// object against what the operator holds in memory. A pass sends no
+// request to the API server to read, so a tick costs nothing when
+// nothing is due. A restarted operator lists everything again, and
+// starts correct.
 //
 // The memory is what keeps a steady pass quiet: each Check's last
 // upsert request, and each project's client and channels. A pass calls
@@ -12,6 +14,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,7 +28,7 @@ import (
 	"github.com/chrisguidry/healthchecks-operator/healthchecks"
 )
 
-// The resources the loop lists and watches.
+// The resources the loop watches.
 var (
 	clusterProjectsResource = kubeResource{Group: "healthchecks.guid.foo", Version: "v1alpha1", Resource: "clusterprojects"}
 	checksResource          = kubeResource{Group: "healthchecks.guid.foo", Version: "v1alpha1", Resource: "checks"}
@@ -33,9 +36,23 @@ var (
 	jobsResource            = kubeResource{Group: "batch", Version: "v1", Resource: "jobs"}
 )
 
+// watchedCollections is the order in which run lists the resources.
+var watchedCollections = []kubeResource{clusterProjectsResource, checksResource, cronJobsResource, jobsResource}
+
+// trims gives each watched resource the type its store holds, which is
+// the type the pass decodes it into.
+var trims = map[kubeResource]func(json.RawMessage) (json.RawMessage, error){
+	clusterProjectsResource: trimTo[ClusterProject],
+	checksResource:          trimTo[Check],
+	cronJobsResource:        trimTo[batchCronJob],
+	jobsResource:            trimTo[batchJob],
+}
+
 // backstopInterval is how often the loop runs a pass with nothing to
-// prompt it. The heartbeat depends on it: a pass at least this often
-// means a loop that finished no pass in two minutes is stuck.
+// prompt it. The pass reads the stores, so the tick sends no request
+// to the API server. It exists for the parts of a pass that time
+// moves: a backoff that ends, and the heartbeat. A pass at least this
+// often means a loop that finished no pass in two minutes is stuck.
 const backstopInterval = 30 * time.Second
 
 // healthchecksTimeout bounds each call to a Healthchecks instance, a
@@ -56,6 +73,9 @@ type controller struct {
 	schedule  *probeSchedule
 	// heartbeat is nil when the settings name no heartbeat check.
 	heartbeat *heartbeat
+	// watches holds a watch for each of watchedCollections. A pass
+	// reads their stores.
+	watches map[kubeResource]*collectionWatch
 
 	// projects is read and written by the pass only.
 	projects map[string]*projectState
@@ -79,6 +99,10 @@ func newController(config settings, client *kubeClient, readings *metrics, now f
 		backstop:  backstopInterval,
 		projects:  map[string]*projectState{},
 		checks:    map[string]*checkState{},
+		watches:   map[kubeResource]*collectionWatch{},
+	}
+	for _, resource := range watchedCollections {
+		c.watches[resource] = newCollectionWatch(client, resource, "", trims[resource], c.wake, readings.watchRestarted(resource.Resource))
 	}
 	c.schedule = newProbeSchedule(now, c.report)
 	if config.heartbeatProject != "" {
@@ -87,30 +111,23 @@ func newController(config settings, client *kubeClient, readings *metrics, now f
 	return c
 }
 
-// run lists each watched resource, starts its watch from that list,
-// and runs a pass at once and then on every wake and every tick, until
-// ctx ends. A failed first list ends the operator, so the failure shows
-// in the pod's restarts instead of in a retry loop.
+// run fills each watch's store from a list, starts each watch from
+// its list, and runs a pass at once and then on every wake and every
+// tick, until ctx ends. Every list finishes before the first pass, so
+// no pass reads a store that is not full. A failed first list ends the
+// operator, so the failure shows in the pod's restarts instead of in a
+// retry loop.
 func (c *controller) run(ctx context.Context) error {
-	watches := []*collectionWatch{}
-	versions := []string{}
-	for _, resource := range []kubeResource{clusterProjectsResource, checksResource, cronJobsResource, jobsResource} {
-		watch := newCollectionWatch(c.client, resource, "", c.wake, c.readings.watchRestarted(resource.Resource))
-		version, err := watch.list(ctx)
-		if err != nil {
-			return fmt.Errorf("listing %s: %w", resource, err)
-		}
-		watches = append(watches, watch)
-		versions = append(versions, version)
+	versions, err := c.list(ctx)
+	if err != nil {
+		return err
 	}
 
 	// run returns only after the goroutines it started stop, so none of
 	// them calls an API after it.
 	var running sync.WaitGroup
 	defer running.Wait()
-	for index, watch := range watches {
-		running.Go(func() { watch.run(ctx, versions[index]) })
-	}
+	c.watch(ctx, &running, versions)
 	running.Go(func() { c.schedule.run(ctx) })
 	if c.heartbeat != nil {
 		running.Go(func() { c.heartbeat.run(ctx, time.Minute) })
@@ -129,6 +146,27 @@ func (c *controller) run(ctx context.Context) error {
 	}
 }
 
+// list fills the store of each watch from a list, and returns the
+// resourceVersion each watch starts from.
+func (c *controller) list(ctx context.Context) (map[kubeResource]string, error) {
+	versions := map[kubeResource]string{}
+	for _, resource := range watchedCollections {
+		version, err := c.watches[resource].list(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing %s: %w", resource, err)
+		}
+		versions[resource] = version
+	}
+	return versions, nil
+}
+
+// watch starts each watch from the version its list returned.
+func (c *controller) watch(ctx context.Context, running *sync.WaitGroup, versions map[kubeResource]string) {
+	for resource, watch := range c.watches {
+		running.Go(func() { watch.run(ctx, versions[resource]) })
+	}
+}
+
 // world is one pass's read of the cluster.
 type world struct {
 	projects []ClusterProject
@@ -138,39 +176,31 @@ type world struct {
 	jobs     map[string][]batchJob
 }
 
-func (c *controller) read(ctx context.Context) (*world, error) {
-	var projects ClusterProjectList
-	var checks CheckList
-	var cronJobs struct {
-		Items []batchCronJob `json:"items"`
+// read decodes the world from the stores. It sends no request to the
+// API server. An object that does not decode fails the whole read, as
+// a list that does not decode would, so no pass acts on part of the
+// cluster.
+func (c *controller) read() (*world, error) {
+	w := &world{cronJobs: map[string]batchCronJob{}, jobs: map[string][]batchJob{}}
+	var err error
+	if w.projects, err = decodeSnapshot[ClusterProject](c.watches[clusterProjectsResource].store); err != nil {
+		return nil, fmt.Errorf("decoding %s: %w", clusterProjectsResource, err)
 	}
-	var jobs struct {
-		Items []batchJob `json:"items"`
+	if w.checks, err = decodeSnapshot[Check](c.watches[checksResource].store); err != nil {
+		return nil, fmt.Errorf("decoding %s: %w", checksResource, err)
 	}
-	lists := []struct {
-		resource kubeResource
-		out      any
-	}{
-		{clusterProjectsResource, &projects},
-		{checksResource, &checks},
-		{cronJobsResource, &cronJobs},
-		{jobsResource, &jobs},
+	cronJobs, err := decodeSnapshot[batchCronJob](c.watches[cronJobsResource].store)
+	if err != nil {
+		return nil, fmt.Errorf("decoding %s: %w", cronJobsResource, err)
 	}
-	for _, list := range lists {
-		if err := c.client.list(ctx, list.resource, "", list.out); err != nil {
-			return nil, fmt.Errorf("listing %s: %w", list.resource, err)
-		}
+	jobs, err := decodeSnapshot[batchJob](c.watches[jobsResource].store)
+	if err != nil {
+		return nil, fmt.Errorf("decoding %s: %w", jobsResource, err)
 	}
-	w := &world{
-		projects: projects.Items,
-		checks:   checks.Items,
-		cronJobs: map[string]batchCronJob{},
-		jobs:     map[string][]batchJob{},
-	}
-	for _, cronJob := range cronJobs.Items {
+	for _, cronJob := range cronJobs {
 		w.cronJobs[objectKey(cronJob.Metadata)] = cronJob
 	}
-	for _, job := range jobs.Items {
+	for _, job := range jobs {
 		w.jobs[job.Metadata.Namespace] = append(w.jobs[job.Metadata.Namespace], job)
 	}
 	return w, nil
@@ -189,7 +219,7 @@ func (c *controller) pass(ctx context.Context) {
 	began := time.Now()
 	defer func() { c.readings.observePass(time.Since(began)) }()
 
-	w, err := c.read(ctx)
+	w, err := c.read()
 	if err != nil {
 		c.log.fault("reading the cluster", topicReconcile, errorText(err))
 		return

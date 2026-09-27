@@ -1,0 +1,34 @@
+# The e2e overlay: the operator's own kustomize base, plus a
+# ClusterProject and a Secret for the Healthchecks instance run.sh
+# starts in Docker.
+#
+# The patch below points the operator at that container and at the
+# image run.sh just built. Pods cannot resolve a Docker container's
+# name, so hostAliases stands in for DNS: 203.0.113.1 is a placeholder
+# that run.sh replaces with the container's real address before this
+# renders. Everything else a Check in checks.yaml reaches by the same
+# hostname resolves the same way, since a hostAlias is a hostname-to-IP
+# mapping, not a route to one container in particular.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../deploy
+  - fixtures.yaml
+images:
+  - name: ghcr.io/chrisguidry/healthchecks-operator
+    newTag: e2e
+patches:
+  - target: {kind: Deployment, name: healthchecks-operator}
+    patch: |
+      - op: add
+        path: /spec/template/spec/hostAliases
+        value: [{ip: "203.0.113.1", hostnames: ["hc-e2e-healthchecks"]}]
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: HEARTBEAT_PROJECT, value: e2e}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: HEARTBEAT_SLUG, value: operator-heartbeat}

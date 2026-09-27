@@ -37,3 +37,16 @@ jobs:
 
       # The kustomize base must build as a consumer takes it.
       - run: kubectl kustomize deploy > /dev/null
+
+  # A real k3s cluster and a real Healthchecks instance, both in
+  # Docker, prove the operator against the actual APIs make test's
+  # fakes stand in for. It runs in about two minutes; the timeout below
+  # leaves headroom for a slower runner without letting a hang run long.
+  # ubuntu-26.04 already has Docker and kubectl, the only things
+  # e2e/run.sh needs besides what actions/checkout gives it.
+  e2e:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: make e2e

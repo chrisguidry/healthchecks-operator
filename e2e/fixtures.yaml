@@ -1,0 +1,17 @@
+# The project the operator connects to: one Healthchecks instance
+# running in Docker, seeded by run.sh with a user, this project, and a
+# Pushover webhook channel. The API key matches what run.sh seeds, and
+# is exactly 32 characters, the length the design calls out as easy to
+# get wrong.
+apiVersion: v1
+kind: Secret
+metadata: {name: e2e-healthchecks, namespace: healthchecks-operator}
+stringData: {api-key: e2e0api0key00000000000000000000x}
+---
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: ClusterProject
+metadata: {name: e2e}
+spec:
+  url: http://hc-e2e-healthchecks:8000
+  apiKeySecret: {name: e2e-healthchecks, key: api-key}
+  channels: [Pushover]

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,18 +44,57 @@ func TestTheLoopReconcilesACheckWhenItAppears(t *testing.T) {
 	})
 }
 
+// passCount reads how many passes the controller finished.
+func passCount(t *testing.T, c *controller) int {
+	t.Helper()
+	for _, sample := range scrape(t, c.readings) {
+		if count, found := strings.CutPrefix(sample, "healthchecks_reconcile_duration_seconds_count "); found {
+			passes, err := strconv.Atoi(count)
+			mustSucceed(t, err)
+			return passes
+		}
+	}
+	t.Fatal("no healthchecks_reconcile_duration_seconds_count sample")
+	return 0
+}
+
 // The backstop tick runs a pass when nothing changes, which is what
-// keeps the heartbeat going.
-func TestTheBackstopTickRunsAPass(t *testing.T) {
+// keeps the heartbeat going. The passes read the stores, so the lists
+// that fill them before the first pass are the only lists.
+func TestTheBackstopTickRunsAPassWithNoList(t *testing.T) {
 	h := startHarness(t)
+	h.api.create(checksResource, httpCheck("example", "website", "https://example.com/"))
 	h.c.backstop = time.Millisecond
 	runController(t, h.c)
 
-	// Each pass lists the Checks once, and nothing changes to wake a
-	// watch.
-	eventually(t, "three passes", func() bool {
-		return requestCount(h.api, "/apis/healthchecks.guid.foo/v1alpha1/checks", "") > 3
-	})
+	eventually(t, "three passes", func() bool { return passCount(t, h.c) > 3 })
+	for _, resource := range watchedCollections {
+		mustMatch(t, h.api.requestCount("GET", resource.path("", ""), false), 1)
+	}
+}
+
+// A Check made, changed, and deleted in the cluster reaches the next
+// pass through the watch, with no list.
+func TestAPassSeesEachChangeThroughTheWatch(t *testing.T) {
+	h := startHarness(t)
+	h.pass()
+	h.api.create(checksResource, httpCheck("example", "website", "https://example.com/"))
+
+	h.pass()
+	created, _ := h.hc.Check("example-website")
+	h.editCheck("example", "website", func(spec map[string]any) { spec["description"] = "The website" })
+	h.pass()
+	updated, _ := h.hc.Check("example-website")
+	h.api.delete(checksResource, "example", "website")
+	h.pass()
+	h.pass()
+
+	mustMatch(t, created.Description, "Public website")
+	mustMatch(t, updated.Description, "The website")
+	mustMatch(t, h.api.read(checksResource, "example", "website", &Check{}), false)
+	_, found := h.hc.Check("example-website")
+	mustMatch(t, found, false)
+	mustMatch(t, h.api.requestCount("GET", checksResource.path("", ""), false), 1)
 }
 
 func TestTheLoopStopsWhenTheFirstListFails(t *testing.T) {
@@ -69,20 +110,21 @@ func TestTheLoopStopsWhenTheFirstListFails(t *testing.T) {
 	mustMatch(t, err.Error(), "listing clusterprojects.healthchecks.guid.foo: GET /apis/healthchecks.guid.foo/v1alpha1/clusterprojects: 403 Forbidden: forbidden")
 }
 
-// A pass that cannot read the cluster writes one line, and reconciles
-// nothing.
+// A pass that cannot decode a store writes one line, and reconciles
+// nothing. A store that trims to the pass's type always decodes, so the
+// test gives the Checks a store that keeps whole objects.
 func TestAPassThatCannotReadTheClusterSaysSo(t *testing.T) {
 	h := startHarness(t)
-	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-	}))
-	t.Cleanup(refusing.Close)
-	h.c.client = newKubeClient(refusing.URL, refusing.Client(), "")
+	h.c.watches[checksResource].store, _ = newTestStore(func(object json.RawMessage) (json.RawMessage, error) { return object, nil })
+	h.api.create(checksResource, map[string]any{
+		"metadata": map[string]any{"namespace": "example", "name": "website"},
+		"spec":     "not an object",
+	})
 
 	h.pass()
 	h.pass()
 
-	mustMatch(t, strings.Join(h.log.lines(), "\n"), "reading the cluster: listing clusterprojects.healthchecks.guid.foo: GET /apis/healthchecks.guid.foo/v1alpha1/clusterprojects: 403 Forbidden: forbidden")
+	mustMatch(t, strings.Join(h.log.lines(), "\n"), "reading the cluster: decoding checks.healthchecks.guid.foo: json: cannot unmarshal string into Go struct field Check.spec of type main.CheckSpec")
 }
 
 func TestOperateRunsUntilItsContextEnds(t *testing.T) {

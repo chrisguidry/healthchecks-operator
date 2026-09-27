@@ -189,6 +189,32 @@ func (f *fakeKube) requests() []fakeRequest {
 	return slices.Clone(f.log)
 }
 
+// versions returns the resourceVersion of each object of a resource,
+// keyed by namespace/name.
+func (f *fakeKube) versions(resource kubeResource) map[string]string {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	versions := map[string]string{}
+	for key, object := range f.objects {
+		if key.resource == resource {
+			versions[key.namespace+"/"+key.name] = stringAt(metadataOf(object), "resourceVersion")
+		}
+	}
+	return versions
+}
+
+// requestCount counts the requests of one method to one path, the
+// watches or the rest.
+func (f *fakeKube) requestCount(method, path string, watch bool) int {
+	count := 0
+	for _, request := range f.requests() {
+		if request.Method == method && request.Path == path && (request.Query.Get("watch") == "true") == watch {
+			count++
+		}
+	}
+	return count
+}
+
 // commit stores a change and records its event. A change to nothing
 // moves no version. The caller holds the mutex.
 func (f *fakeKube) commit(key fakeKey, before, after map[string]any) map[string]any {
@@ -366,6 +392,14 @@ func (f *fakeKube) serveWatch(w http.ResponseWriter, r *http.Request, collection
 		case <-dropping:
 			return
 		case <-changed:
+		}
+		// A select picks at random when both are ready. A dropped stream
+		// writes nothing more, so a change made after the drop reaches
+		// the client only through its next list.
+		select {
+		case <-dropping:
+			return
+		default:
 		}
 		f.mutex.Lock()
 	}

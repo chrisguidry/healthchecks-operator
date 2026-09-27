@@ -1,9 +1,9 @@
 package main
 
 // A watch is a GET whose response does not end. The API server holds
-// the connection open and writes one JSON event for each change. The
-// reconcile loop lists everything on each pass, so an event only wakes
-// the loop and carries nothing to it.
+// the connection open and writes one JSON event for each change. Each
+// event changes the watch's store and wakes the reconcile loop, and the
+// pass reads the store. Only a new watch lists the collection.
 
 import (
 	"context"
@@ -14,12 +14,13 @@ import (
 	"time"
 )
 
-// collectionWatch wakes the reconcile loop on every change to one
-// collection.
+// collectionWatch keeps one collection in its store, and wakes the
+// reconcile loop on every change to it.
 type collectionWatch struct {
 	client    *kubeClient
 	resource  kubeResource
 	namespace string
+	store     *objectStore
 	wake      chan<- struct{}
 	// restarted runs each time the watch opens a stream after the first,
 	// so a metric counts the restarts.
@@ -32,11 +33,16 @@ type collectionWatch struct {
 	backoff time.Duration
 }
 
-func newCollectionWatch(client *kubeClient, resource kubeResource, namespace string, wake chan<- struct{}, restarted func()) *collectionWatch {
+// trim decodes an object of the collection into the operator's type
+// for it, and encodes that again. trimTo gives one for each type.
+func newCollectionWatch(client *kubeClient, resource kubeResource, namespace string, trim func(json.RawMessage) (json.RawMessage, error), wake chan<- struct{}, restarted func()) *collectionWatch {
 	return &collectionWatch{
 		client:    client,
 		resource:  resource,
 		namespace: namespace,
+		store: newObjectStore(trim, func(key, reason string) {
+			fmt.Fprintf(os.Stderr, "watching %s: skipping %s: %s\n", resource, key, reason)
+		}),
 		wake:      wake,
 		restarted: restarted,
 		pause:     2 * time.Second,
@@ -44,11 +50,13 @@ func newCollectionWatch(client *kubeClient, resource kubeResource, namespace str
 	}
 }
 
-// run watches from resourceVersion until ctx ends. When a stream ends,
-// for a dropped connection or a 410 Gone, the watch lists the
-// collection, wakes the loop, and watches again from the list's
-// resourceVersion. The pass that the wake starts reads every change
-// that the gap held.
+// run watches from resourceVersion until ctx ends. The caller lists
+// first, so the store is full before the watch starts. When a stream
+// ends, for a dropped connection or a 410 Gone, the watch lists the
+// collection again, which replaces the store, wakes the loop, and
+// watches again from the list's resourceVersion. The store then holds
+// every change that the gap held, and an object deleted in the gap is
+// gone from it.
 //
 // A refused watch or a failed list writes one line when the reason
 // changes, and one line when the watch works again. The wait doubles
@@ -104,7 +112,7 @@ func (w *collectionWatch) stream(ctx context.Context, resourceVersion *string) s
 	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case http.StatusOK:
-		*resourceVersion = readWatchEvents(json.NewDecoder(resp.Body), *resourceVersion, w.wake)
+		*resourceVersion = readWatchEvents(json.NewDecoder(resp.Body), w.store, *resourceVersion, w.wake)
 		return ""
 	case http.StatusGone:
 		return ""
@@ -112,42 +120,56 @@ func (w *collectionWatch) stream(ctx context.Context, resourceVersion *string) s
 	return resp.Status + ": " + responseText(resp.Body)
 }
 
+// list fills the store from a list of the collection, and returns the
+// list's resourceVersion, where the next watch starts.
 func (w *collectionWatch) list(ctx context.Context) (string, error) {
 	var list struct {
 		Metadata struct {
 			ResourceVersion string `json:"resourceVersion"`
 		} `json:"metadata"`
+		Items []json.RawMessage `json:"items"`
 	}
 	if err := w.client.list(ctx, w.resource, w.namespace, &list); err != nil {
 		return "", err
 	}
+	w.store.replace(list.Items)
 	return list.Metadata.ResourceVersion, nil
 }
 
-// readWatchEvents reads events until the stream ends and returns the
-// resourceVersion of the last one. An ERROR event ends the stream: the
-// API server sends a 410 Gone this way when it no longer has the
-// version the watch started from. A BOOKMARK moves the version and
-// wakes nothing.
-func readWatchEvents(decoder *json.Decoder, resourceVersion string, wake chan<- struct{}) string {
+// readWatchEvents applies events to the store until the stream ends,
+// and returns the resourceVersion of the last one. The events arrive
+// in the order of the changes, so each one replaces what the store
+// holds. An ERROR event ends the stream: the API server sends a 410
+// Gone this way when it no longer has the version the watch started
+// from. An object that does not decode leaves the store, and the
+// stream goes on. An event with no readable metadata has no key to
+// remove, so it ends the stream, and the list that follows puts the
+// store right. A BOOKMARK moves the version and wakes nothing.
+func readWatchEvents(decoder *json.Decoder, store *objectStore, resourceVersion string, wake chan<- struct{}) string {
 	for {
 		var event struct {
-			Type   string `json:"type"`
-			Object struct {
-				Metadata struct {
-					ResourceVersion string `json:"resourceVersion"`
-				} `json:"metadata"`
-			} `json:"object"`
+			Type   string          `json:"type"`
+			Object json.RawMessage `json:"object"`
 		}
 		if err := decoder.Decode(&event); err != nil || event.Type == "ERROR" {
 			return resourceVersion
 		}
-		if version := event.Object.Metadata.ResourceVersion; version != "" {
+		meta, err := readStoredMeta(event.Object)
+		if err != nil {
+			return resourceVersion
+		}
+		if version := meta.Metadata.ResourceVersion; version != "" {
 			resourceVersion = version
 		}
-		if event.Type != "BOOKMARK" {
-			poke(wake)
+		switch event.Type {
+		case "ADDED", "MODIFIED":
+			store.put(meta.key(), event.Object)
+		case "DELETED":
+			store.remove(meta.key())
+		default:
+			continue
 		}
+		poke(wake)
 	}
 }
 
