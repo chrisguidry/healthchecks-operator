@@ -42,9 +42,9 @@ func probeIdentity(spec CheckSpec) string {
 // spec changed. A prober that cannot be built stops the old one, so
 // the check goes down instead of reporting on a spec that no longer
 // exists.
-func (c *controller) registerProbe(state *checkState, check *Check) verdict {
+func (c *controller) registerProbe(state *checkState, check *Check, pingURL string) verdict {
 	identity := probeIdentity(check.Spec)
-	if identity == state.probe {
+	if identity == state.probe && pingURL == state.probeURL {
 		return synced
 	}
 	interval, err := probeInterval(check.Spec)
@@ -65,8 +65,16 @@ func (c *controller) registerProbe(state *checkState, check *Check) verdict {
 		c.stopProbe(state)
 		return verdict{reasonProbeInvalid, errorText(err)}
 	}
-	c.schedule.set(state.namespace+"/"+state.name, interval, timedProber{built, kind, c.readings})
-	state.probe = identity
+	key := state.namespace + "/" + state.name
+	if state.probe != "" && pingURL != state.probeURL {
+		// The probe now pings another check, one this Check took over
+		// by its slug or found in another project. That check may have
+		// gone longer without a ping than the interval allows, so the
+		// key starts again, and a new key is due at once.
+		c.schedule.remove(key)
+	}
+	c.schedule.set(key, interval, timedProber{built, kind, c.readings})
+	state.probe, state.probeURL = identity, pingURL
 	return synced
 }
 
@@ -77,7 +85,7 @@ func (c *controller) stopProbe(state *checkState) {
 		return
 	}
 	c.schedule.remove(state.namespace + "/" + state.name)
-	state.probe = ""
+	state.probe, state.probeURL = "", ""
 }
 
 // report pings the check with one probe's result, and records the

@@ -56,6 +56,9 @@ type checkState struct {
 	// probe names the probe spec registered with the schedule, or is
 	// empty when none is.
 	probe string
+	// probeURL is the ping URL the registered probe reports to. When it
+	// changes, the probe starts again at once.
+	probeURL string
 	// runs is where a cronJob check's reporting stands.
 	runs cronJobRuns
 	// deleted says the check is gone from Healthchecks, so a retried
@@ -91,7 +94,7 @@ func (c *controller) checkState(check *Check) *checkState {
 		// The old object's prober stays registered under the same key,
 		// so the new state names it, and the pass replaces or removes it.
 		held.mutex.Lock()
-		state.probe = held.probe
+		state.probe, state.probeURL = held.probe, held.probeURL
 		held.mutex.Unlock()
 	}
 	c.checks[key] = state
@@ -206,7 +209,7 @@ func (c *controller) syncCheck(ctx context.Context, check *Check, state *checkSt
 		}
 		return synced
 	}
-	return c.registerProbe(state, check)
+	return c.registerProbe(state, check, next.PingURL)
 }
 
 // upsertCheck sends the request unless this process already sent the

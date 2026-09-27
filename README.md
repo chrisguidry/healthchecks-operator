@@ -175,6 +175,27 @@ check by slug, so a reinstall finds the checks it made before.
 
 Deleting a `Check` deletes its check in Healthchecks, with its history.
 
+### Take over an existing check
+
+A `Check` whose slug matches a check that already exists in the project
+takes that check over, with its ping URL and its history. Set `spec.slug`
+to the existing check's slug, and `spec.displayName` to its name. An
+`http` or `tls` probe runs at once on a check it takes over, because that
+check may have gone longer without a ping than the probe's interval.
+
+If Terraform made the check with the `healthchecksio` provider, replace
+the resource with a `removed` block, so Terraform forgets the check
+without deleting it:
+
+```hcl
+removed {
+  from = healthchecksio_check.website
+  lifecycle {
+    destroy = false
+  }
+}
+```
+
 ### When a probe fails
 
 The operator sends the reason as the body of the failure ping, and

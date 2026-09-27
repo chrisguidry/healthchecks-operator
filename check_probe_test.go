@@ -118,3 +118,27 @@ func TestACheckThatStopsProbingLosesPassing(t *testing.T) {
 	mustMatch(t, conditionOf(check, "Passing").Status, "")
 	mustMatch(t, conditionOf(check, "Ready").Reason, "CronJobNotFound")
 }
+
+// A probe check whose ping URL changes, because it took over another
+// check by its slug, probes at once. The check it took over may have
+// gone longer without a ping than the probe's interval allows, and a
+// probe that waited out its interval would leave it down.
+func TestACheckThatAdoptsAnotherCheckProbesAtOnce(t *testing.T) {
+	h := startHarness(t)
+	check := httpCheck("example", "website", startSite(t, http.StatusOK))
+	check.Spec.HTTP.Interval = "24h"
+	h.api.create(checksResource, check)
+	h.runProbes()
+	h.pass()
+	h.probedCheck("example", "website")
+
+	h.editCheck("example", "website", func(spec map[string]any) {
+		spec["slug"] = "example-com"
+	})
+	h.pass()
+
+	adopted, _ := h.hc.Check("example-com")
+	eventually(t, "a ping on the adopted check", func() bool {
+		return h.pingKinds(adopted.UUID) == "success"
+	})
+}
