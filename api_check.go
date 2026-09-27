@@ -184,9 +184,13 @@ type HTTPRequest struct {
 	URL string `json:"url"`
 	// TLSVerify is a pointer because absent means true: the probe
 	// verifies the server's certificate unless a request turns that off.
-	TLSVerify *bool               `json:"tlsVerify,omitempty"`
-	Headers   []RequestHeader     `json:"headers,omitempty"`
-	Expect    ResponseExpectation `json:"expect,omitempty"`
+	TLSVerify *bool `json:"tlsVerify,omitempty"`
+	// FollowRedirects makes the request follow redirects, and hold the
+	// last response to the expectations. Absent means false, so a
+	// request can expect a redirect itself.
+	FollowRedirects bool                `json:"followRedirects,omitempty"`
+	Headers         []RequestHeader     `json:"headers,omitempty"`
+	Expect          ResponseExpectation `json:"expect,omitempty"`
 }
 
 // RequestHeader is one request header, in the shape of a container's

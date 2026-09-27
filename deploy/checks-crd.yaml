@@ -152,6 +152,9 @@ spec:
                           tlsVerify:
                             type: boolean
                             description: "Whether the probe verifies the server's TLS certificate. Default is true."
+                          followRedirects:
+                            type: boolean
+                            description: "Whether the request follows redirects, up to 10, and holds the last response to expect. Default is false, so a request can expect a redirect itself. A followed redirect keeps the Host header only when its Location is relative, sends none of this request's headers to another host, and is refused from https to http. Cookies set along the way come back on the next hop."
                           headers:
                             type: array
                             maxItems: 32

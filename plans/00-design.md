@@ -127,7 +127,9 @@ http:
 ```
 
 - Requests do not follow redirects, so a redirect is something a request can
-  expect.
+  expect. A request with `followRedirects: true` follows them, and holds
+  the last response to its expectations, for a page that redirects to a
+  sign-in page.
 - `headers` is a list, in the shape of a container's `env`. Each entry has a
   `value` or a `valueFrom.secretKeyRef`. The Secret must be in the `Check`'s
   namespace.

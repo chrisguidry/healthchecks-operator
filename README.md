@@ -128,7 +128,12 @@ spec:
 ```
 
 Every `interval`, the operator sends each request in order. Requests do not
-follow redirects, so a redirect is something to expect. The check passes only
+follow redirects, so a redirect is something to expect. Set
+`followRedirects: true` on a request to follow them and check the last
+response, for a page that redirects to a sign-in page. A followed redirect
+keeps a `Host` header only when its `Location` is relative, sends none of
+the request's headers to another host, and is never followed from https to
+http. Cookies set along the way come back on the next hop. The check passes only
 if every request gets the status, the headers, and the body text it expects.
 A header takes a `value`, or a `valueFrom` that reads a Secret in the
 `Check`'s namespace. Set `tlsVerify: false` on a request to skip certificate

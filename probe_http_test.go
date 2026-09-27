@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +19,9 @@ import (
 type probeTarget struct {
 	mutex sync.Mutex
 	paths []string
+	// plain is the plain HTTP server's URL, for a redirect from https
+	// to http.
+	plain string
 }
 
 func (target *probeTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -29,15 +33,46 @@ func (target *probeTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "Welcome to example.com")
 	case "/moved":
 		http.Redirect(w, r, "https://example.com/", http.StatusMovedPermanently)
+	case "/sign-in":
+		http.Redirect(w, r, "/echo", http.StatusFound)
+	case "/absolute":
+		http.Redirect(w, r, "http://"+localAddress(r)+"/echo", http.StatusFound)
+	case "/elsewhere":
+		// localhost reaches this same server under another host name.
+		http.Redirect(w, r, "http://localhost:"+localPort(r)+"/echo?code=secret", http.StatusFound)
+	case "/downgrade":
+		http.Redirect(w, r, target.plain+"/echo", http.StatusFound)
+	case "/userinfo":
+		http.Redirect(w, r, "http://user:hunter2@localhost:"+localPort(r)+"/broken", http.StatusFound)
+	case "/loop":
+		http.Redirect(w, r, "/loop?state=secret", http.StatusFound)
+	case "/session":
+		if _, err := r.Cookie("session"); err != nil {
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "1"})
+			http.Redirect(w, r, "/session", http.StatusFound)
+			return
+		}
+		fmt.Fprint(w, "signed in")
 	case "/broken":
 		w.WriteHeader(http.StatusBadGateway)
 	case "/echo":
-		fmt.Fprintf(w, "host=%s authorization=%s", r.Host, r.Header.Get("Authorization"))
+		fmt.Fprintf(w, "host=%s authorization=%s token=%s|", r.Host, r.Header.Get("Authorization"), r.Header.Get("X-Probe-Token"))
 	case "/large":
 		fmt.Fprint(w, strings.Repeat("a", bodyLimit), "Welcome")
 	case "/slow":
 		<-r.Context().Done()
 	}
+}
+
+// localAddress is the address the server answered on, so a redirect
+// can name this server absolutely.
+func localAddress(r *http.Request) string {
+	return r.Context().Value(http.LocalAddrContextKey).(net.Addr).String()
+}
+
+func localPort(r *http.Request) string {
+	_, port, _ := net.SplitHostPort(localAddress(r))
+	return port
 }
 
 func (target *probeTarget) requested() string {
@@ -62,6 +97,7 @@ func startProbeTargets(t *testing.T) *httpProbeHarness {
 	target := &probeTarget{}
 	plain := httptest.NewServer(target)
 	t.Cleanup(plain.Close)
+	target.plain = plain.URL
 	secure := httptest.NewUnstartedServer(target)
 	// A rejected handshake is the outcome some tests want, and the
 	// server's log line for it is noise.
@@ -76,7 +112,7 @@ func startProbeTargets(t *testing.T) *httpProbeHarness {
 	return &httpProbeHarness{
 		target: target,
 		api:    api,
-		urls:   strings.NewReplacer("{http}", plain.URL, "{https}", secure.URL),
+		urls:   strings.NewReplacer("{http}", plain.URL, "{https}", secure.URL, "{localhost}", strings.Replace(plain.URL, "127.0.0.1", "localhost", 1)),
 		roots:  roots,
 	}
 }
@@ -115,6 +151,32 @@ func TestHTTPProbeResults(t *testing.T) {
 			[]HTTPRequest{{URL: "{http}/moved", Expect: ResponseExpectation{
 				Status:  []int32{301},
 				Headers: map[string]string{"Location": "https://example.com/"}}}}, ""},
+		{"redirect is followed when the request asks",
+			[]HTTPRequest{{URL: "{http}/sign-in", FollowRedirects: true,
+				Headers: []RequestHeader{{Name: "Host", Value: "example.com"}},
+				Expect:  ResponseExpectation{Status: []int32{200}, BodyContains: "host=example.com"}}}, ""},
+		{"an absolute redirect drops the Host header",
+			[]HTTPRequest{{URL: "{http}/absolute", FollowRedirects: true,
+				Headers: []RequestHeader{{Name: "Host", Value: "example.com"}},
+				Expect:  ResponseExpectation{BodyContains: "host=127.0.0.1"}}}, ""},
+		{"headers stay off a redirect to another host",
+			[]HTTPRequest{{URL: "{http}/elsewhere", FollowRedirects: true,
+				Headers: []RequestHeader{{Name: "X-Probe-Token", Value: "abc"}, secretHeader("Authorization", "probe-token", "header")},
+				Expect:  ResponseExpectation{BodyContains: "authorization= token=|"}}}, ""},
+		{"a redirect from https to http is refused",
+			[]HTTPRequest{{URL: "{https}/downgrade", FollowRedirects: true}},
+			"{https}/downgrade: refused to follow a redirect from https to http, at {http}/echo"},
+		{"a redirect loop names where it stopped, without the query",
+			[]HTTPRequest{{URL: "{http}/loop", FollowRedirects: true}},
+			"{http}/loop: stopped after 10 redirects, at {http}/loop"},
+		{"a password in a redirect stays out of the reason, which names where the request landed",
+			[]HTTPRequest{{URL: "{http}/userinfo", FollowRedirects: true, Expect: ResponseExpectation{Status: []int32{200}}}},
+			"{http}/userinfo: status 502, want 200, at {localhost}/broken"},
+		{"a cookie set on a redirect comes back on the next hop",
+			[]HTTPRequest{{URL: "{http}/session", FollowRedirects: true, Expect: ResponseExpectation{BodyContains: "signed in"}}}, ""},
+		{"redirect is the answer unless the request asks to follow it",
+			[]HTTPRequest{{URL: "{http}/sign-in", Expect: ResponseExpectation{Status: []int32{200}}}},
+			"{http}/sign-in: status 302, want 200"},
 		{"header differs",
 			[]HTTPRequest{{URL: "{http}/moved", Expect: ResponseExpectation{
 				Headers: map[string]string{"Location": "https://example.net/"}}}},
