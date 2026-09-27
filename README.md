@@ -186,7 +186,8 @@ example.com:443: certificate expires 2026-10-03T00:00:00Z, 6d left, want at leas
 backup-29842019: BackoffLimitExceeded: Job has reached the specified backoff limit
 ```
 
-The same reason is the message of the `Check`'s `Passing` condition.
+The same reason is the message of the `Check`'s `Passing` condition. For a
+`cronJob` check, `Passing` follows the last run the operator reported.
 `kubectl get checks -A` lists every check with its probe kind and its `Ready`
 and `Passing` state.
 

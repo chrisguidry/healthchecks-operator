@@ -224,8 +224,11 @@ the same as the current one.
   a `cronJob` check.
 - Conditions:
   - `Ready`: the check exists in Healthchecks and matches the spec.
-  - `Passing`: the last probe passed. When it is `False`, the message is
-    the failure reason. This condition is not set for a `cronJob` check.
+  - `Passing`: for `http` and `tls`, the last probe passed. For `cronJob`,
+    the last run the operator reported succeeded. When it is `False`, the
+    message is the failure reason, the same text as the ping body. A
+    `cronJob` check has no `Passing` until the operator reports its first
+    finished run.
 
 The operator writes status only when something in it changes. A probe
 that gets the same result as the one before writes nothing, so a steady

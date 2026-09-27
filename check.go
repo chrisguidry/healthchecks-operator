@@ -159,7 +159,7 @@ func (c *controller) reconcileCheck(ctx context.Context, check *Check, w *world)
 		v = c.syncCheck(ctx, check, state, project, w, &next)
 	}
 	next.Conditions = withCondition(next.Conditions, checkReady(v, state.generation, c.now()))
-	if kind != ProbeKindHTTP && kind != ProbeKindTLS {
+	if kind == ProbeKindCronJob && !fromRun(next.Conditions) {
 		next.Conditions = withoutCondition(next.Conditions, passingCondition)
 	}
 	next.Probe = kind.String()
@@ -200,7 +200,10 @@ func (c *controller) syncCheck(ctx context.Context, check *Check, state *checkSt
 		return v
 	}
 	if check.Spec.ProbeKind() == ProbeKindCronJob {
-		c.reportRuns(ctx, state, w.cronJobs[cronJobKey(check)], w.jobs[state.namespace], next.PingURL)
+		finished := c.reportRuns(ctx, state, w.cronJobs[cronJobKey(check)], w.jobs[state.namespace], next.PingURL)
+		if finished != nil {
+			next.Conditions = withCondition(next.Conditions, runPassing(*finished, state.generation, c.now()))
+		}
 		return synced
 	}
 	return c.registerProbe(state, check)

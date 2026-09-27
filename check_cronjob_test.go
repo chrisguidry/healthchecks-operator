@@ -166,3 +166,63 @@ func TestACronJobCheckCatchesUpAfterARestart(t *testing.T) {
 	mustMatch(t, h.pingKinds(uuid), "success, start, success, start, success")
 	mustMatch(t, h.check("example", "database-backup").Status.LastReportedJob, "backup-3")
 }
+
+// A cronJob Check's Passing condition follows the last run the operator
+// reported, so kubectl shows a failed backup the way it shows a failed
+// probe.
+func TestACronJobCheckIsPassingWhenItsLastRunSucceeded(t *testing.T) {
+	cases := []struct {
+		finish string
+		want   Condition
+	}{
+		{"Complete", Condition{
+			Type:               "Passing",
+			Status:             ConditionTrue,
+			ObservedGeneration: 1,
+			Reason:             "RunSucceeded",
+			Message:            "backup-1 completed",
+			LastTransitionTime: "2026-09-27T12:00:00Z",
+		}},
+		{"Failed", Condition{
+			Type:               "Passing",
+			Status:             ConditionFalse,
+			ObservedGeneration: 1,
+			Reason:             "RunFailed",
+			Message:            "backup-1: BackoffLimitExceeded",
+			LastTransitionTime: "2026-09-27T12:00:00Z",
+		}},
+	}
+	for _, one := range cases {
+		t.Run(one.finish, func(t *testing.T) {
+			h := startHarness(t)
+			h.api.create(cronJobsResource, backupCronJob())
+			h.api.create(checksResource, backupCheck())
+			h.pass()
+
+			h.startRun("backup-1")
+			h.finishRun("backup-1", one.finish)
+			h.pass()
+
+			mustMatch(t, conditionOf(h.check("example", "database-backup"), "Passing"), one.want)
+		})
+	}
+}
+
+// Passing stays where the last run left it through the passes that
+// report nothing, including a run that has started and not finished.
+func TestACronJobCheckKeepsPassingBetweenRuns(t *testing.T) {
+	h := startHarness(t)
+	h.api.create(cronJobsResource, backupCronJob())
+	h.api.create(checksResource, backupCheck())
+	h.startRun("backup-1")
+	h.finishRun("backup-1", "Failed")
+	h.pass()
+
+	h.startRun("backup-2")
+	h.pass()
+	h.pass()
+
+	check := h.check("example", "database-backup")
+	mustMatch(t, conditionOf(check, "Passing").Status, ConditionFalse)
+	mustMatch(t, conditionOf(check, "Passing").Message, "backup-1: BackoffLimitExceeded")
+}
