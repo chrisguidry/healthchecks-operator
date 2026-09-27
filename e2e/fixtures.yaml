@@ -1,3 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata: {name: healthchecks-operator}
+---
 # The project the operator connects to: one Healthchecks instance
 # running in Docker, seeded by run.sh with a user, this project, and a
 # Pushover webhook channel. The API key matches what run.sh seeds, and

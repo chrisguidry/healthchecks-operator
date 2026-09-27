@@ -11,8 +11,11 @@ It works with healthchecks.io and with a self-hosted Healthchecks.
 
 `deploy/` is a kustomize base. It installs the two CRDs, the RBAC, and one
 Deployment into the namespace `healthchecks-operator`, and it names the image
-`ghcr.io/chrisguidry/healthchecks-operator:latest`. Take it through your own
-GitOps and pin a release tag. With Flux:
+`ghcr.io/chrisguidry/healthchecks-operator:latest`. It does not create the
+namespace: create it yourself, or set `targetNamespace` to one you already
+run, so removing the operator never deletes a namespace other workloads
+share. Take the base through your own GitOps and pin a release tag. With
+Flux:
 
 ```yaml
 apiVersion: source.toolkit.fluxcd.io/v1
@@ -41,7 +44,8 @@ spec:
       newTag: 2026.09.27-001
 ```
 
-Or apply it once with `kubectl apply -k deploy`.
+Or apply it once with `kubectl create namespace healthchecks-operator` and
+`kubectl apply -k deploy`.
 
 `deploy/monitoring/` is a kustomize Component with a PodMonitor for the
 metrics on port 9200. Add it to `components` if you run the Prometheus

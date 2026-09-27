@@ -7,11 +7,6 @@
 # from Healthchecks when it starts.
 ---
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: healthchecks-operator
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: healthchecks-operator

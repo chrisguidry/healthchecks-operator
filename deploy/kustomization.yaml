@@ -10,9 +10,11 @@
 #     - name: ghcr.io/chrisguidry/healthchecks-operator
 #       newTag: <version>
 #
-# A kustomization that takes this base can set its own namespace. The
-# Namespace object, the ServiceAccount, and the ClusterRoleBinding's
-# subject all follow it.
+# The base does not create a namespace. Whoever runs the cluster decides
+# which namespace the operator runs in, and which object owns it, so a
+# kustomization that removes the operator never deletes a namespace that
+# other workloads share. Create the namespace first, or set your own:
+# the ServiceAccount and the ClusterRoleBinding's subject follow it.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
