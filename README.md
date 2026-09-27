@@ -205,7 +205,9 @@ down.
 
 `make test` runs every check CI runs: gofmt, vet, the race detector, and the
 coverage gate. The tests run against fake Kubernetes and Healthchecks API
-servers built on `httptest`, so they need no cluster. `plans/00-design.md`
+servers built on `httptest`, so they need no cluster. `make e2e` runs the
+operator in a k3s cluster in Docker against the official Healthchecks
+image, in about two minutes, and needs only Docker and kubectl. `plans/00-design.md`
 is the design, and the source of each fact it depends on.
 
 ## License
