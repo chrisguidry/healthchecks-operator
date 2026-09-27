@@ -197,3 +197,36 @@ func sleep(ctx context.Context, wait time.Duration) bool {
 		return true
 	}
 }
+
+// firstList lists until a list works, with the same backoff as a
+// broken watch, and logs each new reason once. A refused first list is
+// often a moment of version skew: a new operator reaches a collection
+// before the RBAC rule that allows it, because GitOps applied the new
+// image first. Ending the operator for it would leave the pod in a
+// crash loop whose delay outlasts the skew. An error that cannot clear,
+// such as a 404 for a resource the API server does not serve, returns
+// at once, so it ends the operator and shows in the pod's restarts.
+func (w *collectionWatch) firstList(ctx context.Context) (string, error) {
+	wait := w.pause
+	fault := ""
+	for {
+		version, err := w.list(ctx)
+		if err == nil {
+			if fault != "" {
+				fmt.Fprintf(os.Stderr, "listing %s: recovered\n", w.resource)
+			}
+			return version, nil
+		}
+		if !transient(err) {
+			return "", err
+		}
+		if reason := errorText(err); reason != fault {
+			fmt.Fprintf(os.Stderr, "listing %s: %s\n", w.resource, reason)
+			fault = reason
+		}
+		if !sleep(ctx, wait) {
+			return "", ctx.Err()
+		}
+		wait = min(wait*2, w.backoff)
+	}
+}

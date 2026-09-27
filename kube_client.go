@@ -34,6 +34,27 @@ var serviceAccountDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 
 // These two answers are normal states, not faults. The caller answers
 // an absent object by skipping it, and a conflict by reading again.
+// statusError is an answer outside 2xx that is not a 404 or a 409,
+// with the code kept so a caller can tell a refusal that may clear
+// from one that cannot.
+type statusError struct {
+	code int
+	text string
+}
+
+func (e *statusError) Error() string { return e.text }
+
+// transient reports whether err may clear if the request is tried
+// again: a refusal by RBAC, which a GitOps apply can fix at any moment,
+// an overloaded or failing server, or a network error.
+func transient(err error) bool {
+	if status, ok := errors.AsType[*statusError](err); ok {
+		return status.code == http.StatusForbidden || status.code == http.StatusTooManyRequests || status.code >= 500
+	}
+	var network net.Error
+	return errors.As(err, &network)
+}
+
 var (
 	errNotFound = errors.New("not found")
 	errConflict = errors.New("conflict: the object changed since it was read")
@@ -190,7 +211,7 @@ func decodeAnswer(resp *http.Response, method, path string, out any) error {
 	case resp.StatusCode == http.StatusConflict:
 		return errConflict
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, responseText(resp.Body))
+		return &statusError{code: resp.StatusCode, text: fmt.Sprintf("%s %s: %s: %s", method, path, resp.Status, responseText(resp.Body))}
 	case out == nil:
 		return nil
 	}

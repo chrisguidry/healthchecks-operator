@@ -24,3 +24,10 @@ func (f *fakeKube) refused(w http.ResponseWriter, r *http.Request) bool {
 	}
 	return found
 }
+
+// allow stops refusing "method path".
+func (f *fakeKube) allow(method, path string) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	delete(f.refusals, method+" "+path)
+}

@@ -123,11 +123,16 @@ func newController(config settings, client *kubeClient, readings *metrics, now f
 // run fills each watch's store from a list, starts each watch from
 // its list, and runs a pass at once and then on every wake and every
 // tick, until ctx ends. Every list finishes before the first pass, so
-// no pass reads a store that is not full. A failed first list ends the
-// operator, so the failure shows in the pod's restarts instead of in a
-// retry loop.
+// no pass reads a store that is not full: a pass that read an empty
+// store of ClusterProjects would mark every Check not Ready. A refused
+// first list is tried again with backoff, and no pass runs meanwhile,
+// so the heartbeat stops and says the operator is not working.
 func (c *controller) run(ctx context.Context) error {
 	versions, err := c.list(ctx)
+	if ctx.Err() != nil {
+		// A shutdown while a first list was tried again is not a fault.
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -160,7 +165,7 @@ func (c *controller) run(ctx context.Context) error {
 func (c *controller) list(ctx context.Context) (map[kubeResource]string, error) {
 	versions := map[kubeResource]string{}
 	for _, resource := range watchedCollections {
-		version, err := c.watches[resource].list(ctx)
+		version, err := c.watches[resource].firstList(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("listing %s: %w", resource, err)
 		}
