@@ -1,0 +1,15 @@
+# The monitoring component adds one PodMonitor for the operator's
+# metrics and changes nothing in the base. A cluster without the
+# Prometheus Operator does not take it.
+#
+# Take it beside the base:
+#
+#   resources:
+#     - https://github.com/chrisguidry/healthchecks-operator//deploy?ref=<version>
+#   components:
+#     - https://github.com/chrisguidry/healthchecks-operator//deploy/monitoring?ref=<version>
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - podmonitor.yaml

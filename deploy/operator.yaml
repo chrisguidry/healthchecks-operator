@@ -1,0 +1,68 @@
+# The operator: one Deployment with one replica. There is no leader
+# election, so two pods must never run at once, or a check would get two
+# pings for one probe. strategy: Recreate stops the old pod before the
+# new one starts.
+#
+# The pod keeps no state. It reads everything from the API server and
+# from Healthchecks when it starts.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: healthchecks-operator
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: healthchecks-operator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: healthchecks-operator
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: healthchecks-operator
+  template:
+    metadata:
+      labels:
+        app: healthchecks-operator
+    spec:
+      serviceAccountName: healthchecks-operator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: operator
+          image: ghcr.io/chrisguidry/healthchecks-operator:latest
+          env:
+            # The operator reads the Secrets that a ClusterProject names
+            # from its own namespace.
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # To ping a heartbeat check every minute, patch in
+            # HEARTBEAT_PROJECT, the name of a ClusterProject, and
+            # HEARTBEAT_SLUG, the slug of a check in that project.
+          ports:
+            - name: metrics
+              containerPort: 9200
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi

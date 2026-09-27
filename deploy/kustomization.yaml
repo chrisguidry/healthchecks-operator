@@ -1,0 +1,34 @@
+# The kustomize base for healthchecks-operator.
+#
+# Take this base through your own GitOps, with your own patches, or read
+# it and write your own manifests. Pin it to a release tag, the same
+# version as the image:
+#
+#   resources:
+#     - https://github.com/chrisguidry/healthchecks-operator//deploy?ref=<version>
+#   images:
+#     - name: ghcr.io/chrisguidry/healthchecks-operator
+#       newTag: <version>
+#
+# A kustomization that takes this base can set its own namespace. The
+# Namespace object, the ServiceAccount, and the ClusterRoleBinding's
+# subject all follow it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: healthchecks-operator
+
+resources:
+  - clusterprojects-crd.yaml
+  - checks-crd.yaml
+  - rbac.yaml
+  - operator.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/name: healthchecks-operator
+
+images:
+  - name: ghcr.io/chrisguidry/healthchecks-operator
+    newTag: latest

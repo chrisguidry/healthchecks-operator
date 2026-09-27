@@ -1,0 +1,43 @@
+# The operator's permissions. A ClusterProject is cluster-scoped, and a
+# Check can be in any namespace, so this is a ClusterRole.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: healthchecks-operator
+rules:
+  # patch adds and removes the finalizer on a Check.
+  - apiGroups: [healthchecks.guid.foo]
+    resources: [clusterprojects, checks]
+    verbs: [get, list, watch, patch]
+  # Status is written with server-side apply, which is a patch.
+  - apiGroups: [healthchecks.guid.foo]
+    resources: [clusterprojects/status, checks/status]
+    verbs: [patch]
+  # A cronJob check copies its CronJob's schedule, and reports each Job
+  # that the CronJob owns.
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [get, list, watch]
+  # The operator reads each Secret by name when it needs it: the API key
+  # of a ClusterProject, and a header value of an http check. It does
+  # not list or watch Secrets, so it does not hold every Secret in the
+  # cluster in memory.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: healthchecks-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: healthchecks-operator
+# The subject states no namespace. kustomize fills in the namespace of
+# the kustomization that takes this base, so the binding follows the
+# ServiceAccount when that kustomization sets its own namespace.
+subjects:
+  - kind: ServiceAccount
+    name: healthchecks-operator

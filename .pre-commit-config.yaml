@@ -1,0 +1,36 @@
+# These checks run before every commit, through pre-commit or prek. The
+# Go checks are the same `make` target that CI runs, so a commit that
+# passes here passes there.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # Kubernetes manifests are streams of several documents.
+        args: [--allow-multiple-documents]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+  # shellcheck-py includes a shellcheck binary, so the hook works on a
+  # machine without shellcheck.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+  - repo: local
+    hooks:
+      - id: go-mod-tidy
+        name: go mod tidy
+        # -diff reports what a tidy would change and changes nothing, so
+        # a stale go.mod fails the commit.
+        entry: bash -c 'go mod tidy -diff'
+        language: system
+        files: \.go$|^go\.(mod|sum)$
+        pass_filenames: false
+      - id: test-go
+        name: go checks and coverage gate
+        entry: make test-go
+        language: system
+        files: \.go$|^go\.(mod|sum)$|^\.testcoverage\.yml$|^Makefile$|^deploy/
+        pass_filenames: false

@@ -1,0 +1,38 @@
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata:
+  name: website
+  namespace: example
+spec:
+  projectRef:
+    kind: ClusterProject
+    name: internal
+  displayName: example.com
+  slug: example-website
+  description: Public website
+  tags: [internet, website]
+  grace: 15m
+  channels: [Pushover]
+  http:
+    interval: 5m
+    requests:
+      - url: http://example.com/
+        expect:
+          status: [301, 308]
+          headers:
+            Location: https://example.com/
+      - url: https://example.com/
+        expect:
+          status: [200, 401]
+          bodyContains: "Welcome"
+      - url: https://proxy.example.net/
+        tlsVerify: false
+        headers:
+          - name: Host
+            value: example.com
+          - name: Authorization
+            valueFrom:
+              secretKeyRef: { name: probe-token, key: header }
+        expect:
+          status: [200, 401]
+          bodyContains: "Welcome"

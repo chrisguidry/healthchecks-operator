@@ -1,0 +1,15 @@
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata:
+  name: website-cert
+  namespace: example
+spec:
+  projectRef:
+    kind: ClusterProject
+    name: internal
+  description: Certificate expiry
+  tags: [internet, website]
+  tls:
+    interval: 24h
+    host: example.com:443
+    minRemaining: 336h

@@ -1,0 +1,314 @@
+# A Check is one Healthchecks check and the probe that feeds it.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: checks.healthchecks.guid.foo
+spec:
+  group: healthchecks.guid.foo
+  names:
+    kind: Check
+    listKind: CheckList
+    plural: checks
+    singular: check
+    shortNames: [hc]
+    categories: [healthchecks]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      # The status subresource splits spec and status into two write
+      # paths. People declare the spec; only the operator writes status.
+      subresources:
+        status: {}
+      # The default view says which project the check belongs to and
+      # whether it is passing. kubectl get -o wide adds the columns with
+      # priority 1: the check's slug, and why Ready holds its verdict.
+      additionalPrinterColumns:
+        - name: Project
+          type: string
+          jsonPath: .spec.projectRef.name
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Passing
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Passing")].status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+        - name: Slug
+          type: string
+          jsonPath: .status.slug
+          priority: 1
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+          priority: 1
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: "One Healthchecks check and the probe that feeds it. The operator creates and updates the check in Healthchecks, runs the probe, and sends the ping. A Check names exactly one probe: http, tls, or cronJob."
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [projectRef]
+              description: "The project the check belongs to, the check's own identity and defaults on Healthchecks, and the one probe that feeds it."
+              x-kubernetes-validations:
+                # The Kubernetes volume source uses the same one-of
+                # pattern: one probe block names the check's source of
+                # truth, and this rule holds a Check to one of them.
+                - rule: "[has(self.http), has(self.tls), has(self.cronJob)].exists_one(block, block)"
+                  message: "a Check names exactly one of http, tls, or cronJob"
+                # ClusterProject is the only kind projectRef accepts
+                # today. A namespaced Project kind may join it later
+                # without a change to this field's type.
+                - rule: "self.projectRef.kind == 'ClusterProject'"
+                  message: "projectRef.kind is ClusterProject"
+              properties:
+                projectRef:
+                  type: object
+                  required: [kind, name]
+                  description: "The project this check belongs to."
+                  properties:
+                    kind:
+                      type: string
+                      maxLength: 63
+                      description: "The kind of the project. ClusterProject is the only legal value today."
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      description: "The project's name."
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  description: "The check's name on Healthchecks. Default is \"<namespace>/<name>\"."
+                slug:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                  description: "The check's slug on Healthchecks, and the identity every reconcile writes to. Default is \"<namespace>-<name>\". Changing this makes a new check in Healthchecks; the operator deletes the check at the old slug, read from status.slug."
+                description:
+                  type: string
+                  maxLength: 1000
+                  description: "The check's description on Healthchecks."
+                tags:
+                  type: array
+                  maxItems: 32
+                  x-kubernetes-list-type: atomic
+                  description: "The check's tags on Healthchecks."
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 100
+                grace:
+                  type: string
+                  pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
+                  description: "The check's grace period on Healthchecks, a Go duration string such as 15m. Healthchecks waits this long past the expected ping before it alerts."
+                channels:
+                  type: array
+                  maxItems: 32
+                  x-kubernetes-list-type: atomic
+                  description: "The integrations for this check, by name, replacing the project's own list. Absent means the project's spec.channels applies."
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 100
+                http:
+                  type: object
+                  required: [interval, requests]
+                  description: "The operator sends each request in order on every interval. The check pings success only if every request meets its expectations. Requests do not follow redirects, so a redirect is something a request can expect."
+                  x-kubernetes-validations:
+                    - rule: "duration(self.interval) >= duration('1m')"
+                      message: "http.interval is at least 1m"
+                  properties:
+                    interval:
+                      type: string
+                      pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
+                      description: "How often the operator sends every request, a Go duration string such as 5m, and the check's timeout on Healthchecks. Healthchecks asks clients not to ping one check more than 5 times a minute, so this is at least 1m."
+                    requests:
+                      type: array
+                      minItems: 1
+                      maxItems: 32
+                      x-kubernetes-list-type: atomic
+                      description: "The requests the operator sends in order on every interval."
+                      items:
+                        type: object
+                        required: [url]
+                        description: "One request the probe sends, and what it expects back."
+                        properties:
+                          url:
+                            type: string
+                            minLength: 1
+                            maxLength: 2048
+                            description: "The request URL."
+                          tlsVerify:
+                            type: boolean
+                            description: "Whether the probe verifies the server's TLS certificate. Default is true."
+                          headers:
+                            type: array
+                            maxItems: 32
+                            x-kubernetes-list-type: atomic
+                            description: "Request headers, in the shape of a container's env. Go's net/http client takes the Host header from the request's own Host field, not from its headers, so the probe copies a Host entry into that field, and Host behaves like any other header here."
+                            items:
+                              type: object
+                              required: [name]
+                              description: "One request header, with its value stated directly or read from a Secret."
+                              x-kubernetes-validations:
+                                - rule: "[has(self.value), has(self.valueFrom)].exists_one(x, x)"
+                                  message: "a header states exactly one of value and valueFrom"
+                              properties:
+                                name:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 256
+                                  description: "The header name."
+                                value:
+                                  type: string
+                                  maxLength: 4096
+                                  description: "The header's literal value."
+                                valueFrom:
+                                  type: object
+                                  required: [secretKeyRef]
+                                  description: "Where to read the header's value from."
+                                  properties:
+                                    secretKeyRef:
+                                      type: object
+                                      required: [name, key]
+                                      description: "A key in a Secret in the Check's own namespace."
+                                      properties:
+                                        name:
+                                          type: string
+                                          minLength: 1
+                                          maxLength: 253
+                                          description: "The Secret's name."
+                                        key:
+                                          type: string
+                                          minLength: 1
+                                          maxLength: 253
+                                          description: "The key inside the Secret's data."
+                          expect:
+                            type: object
+                            description: "What a passing response looks like. An absent field does not filter on that trait."
+                            properties:
+                              status:
+                                type: array
+                                maxItems: 32
+                                x-kubernetes-list-type: atomic
+                                description: "The status codes this request accepts."
+                                items:
+                                  type: integer
+                                  minimum: 100
+                                  maximum: 599
+                              headers:
+                                type: object
+                                description: "Response headers this request must carry, keyed by header name, with the exact value expected."
+                                additionalProperties:
+                                  type: string
+                              bodyContains:
+                                type: string
+                                maxLength: 4096
+                                description: "Text the response body must contain."
+                tls:
+                  type: object
+                  required: [interval, host, minRemaining]
+                  description: "The operator connects, completes a TLS handshake, and reads the leaf certificate's expiry. The check fails if the certificate does not verify, or if less than minRemaining remains before it expires."
+                  x-kubernetes-validations:
+                    - rule: "duration(self.interval) >= duration('1m')"
+                      message: "tls.interval is at least 1m"
+                    - rule: "duration(self.minRemaining) > duration('0s')"
+                      message: "tls.minRemaining is positive"
+                  properties:
+                    interval:
+                      type: string
+                      pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
+                      description: "How often the operator checks the certificate, a Go duration string such as 24h, and the check's timeout on Healthchecks. This is at least 1m."
+                    host:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      description: "The host the probe connects to, as host or host:port, such as example.com or example.com:8443. The port is 443 when it is absent."
+                    minRemaining:
+                      type: string
+                      pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
+                      description: "How long before expiry the certificate must still have left, a Go duration string such as 336h. It must be greater than zero."
+                cronJob:
+                  type: object
+                  required: [name]
+                  description: "The operator reports each run of a CronJob in the Check's own namespace. It pings /start when a Job the CronJob owns starts, pings success when the Job's Complete condition appears, and pings /fail when its Failed condition appears. The operator copies the CronJob's schedule and timeZone into the Healthchecks check. The CronJob's pod template does not change: it needs no ping URL, no ConfigMap, and no curl container."
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      description: "The CronJob's name, in the Check's own namespace."
+            status:
+              type: object
+              description: "The check's identity on Healthchecks, and whether it is ready and passing. Only the operator writes it."
+              properties:
+                project:
+                  type: string
+                  description: "The ClusterProject that holds the check in Healthchecks. When spec.projectRef names another project, the operator deletes the check from this one before it creates the check in the new one. Empty until the first reconcile."
+                slug:
+                  type: string
+                  description: "The slug the operator last wrote this check under on Healthchecks. Empty until the first reconcile."
+                uuid:
+                  type: string
+                  description: "The check's UUID on Healthchecks. Empty until the first reconcile."
+                pingURL:
+                  type: string
+                  description: "The URL the operator pings for this check. Probes ping this URL directly and never call the management API. Empty until the first reconcile."
+                lastReportedJob:
+                  type: string
+                  description: "The name of the last Job the operator pinged for, for a cronJob check. Empty until the operator reports a run."
+                conditions:
+                  type: array
+                  description: "Ready is True once the check exists in Healthchecks and matches the spec. Passing holds the result of the last probe: True when it passed, and False with the failure reason as the message when it failed. Its lastTransitionTime is when the result changed. Passing is absent for a cronJob check, since a cronJob check has no probe of its own, and until the first probe runs."
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
+                  items:
+                    type: object
+                    required: [type, status, lastTransitionTime]
+                    properties:
+                      type:
+                        type: string
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                        description: >-
+                          The check this entry reports, in CamelCase. It
+                          is the key of this list.
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                        description: >-
+                          The verdict. True is the good verdict, and
+                          Unknown means the operator cannot tell yet.
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 0
+                        description: >-
+                          The metadata.generation this condition judged.
+                      reason:
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                        description: >-
+                          One CamelCase word for why the condition holds
+                          this verdict, meant for a program to match on.
+                      message:
+                        type: string
+                        maxLength: 32768
+                        description: >-
+                          The same answer in a sentence a person reads.
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: >-
+                          When the verdict last changed. It moves only
+                          when the status flips.

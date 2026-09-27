@@ -1,0 +1,10 @@
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: ClusterProject
+metadata:
+  name: internal
+spec:
+  url: https://healthchecks.example.com
+  apiKeySecret:
+    name: internal-healthchecks
+    key: api-key
+  channels: [Pushover]

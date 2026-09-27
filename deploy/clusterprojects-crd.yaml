@@ -1,0 +1,150 @@
+# A ClusterProject is one project on one Healthchecks instance.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterprojects.healthchecks.guid.foo
+spec:
+  group: healthchecks.guid.foo
+  names:
+    kind: ClusterProject
+    listKind: ClusterProjectList
+    plural: clusterprojects
+    singular: clusterproject
+    shortNames: [hcp]
+    categories: [healthchecks]
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      # The status subresource splits spec and status into two write
+      # paths. People declare the spec; only the operator writes status.
+      subresources:
+        status: {}
+      # The default view says whether the project is reachable and what
+      # instance it names. kubectl get -o wide adds the columns with
+      # priority 1: the default channels and why Ready holds its verdict.
+      additionalPrinterColumns:
+        - name: URL
+          type: string
+          jsonPath: .spec.url
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+        - name: Channels
+          type: string
+          jsonPath: .spec.channels
+          priority: 1
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+          priority: 1
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: "One project on one Healthchecks instance. Every Healthchecks v3 API key belongs to exactly one project, so the project is the unit the operator talks to. A ClusterProject is cluster-scoped: it has no namespace of its own, and it reads its API key Secret from the operator's own namespace, the way cert-manager's ClusterIssuer does."
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [url, apiKeySecret]
+              description: "The Healthchecks instance to talk to, the Secret that holds a read-write API key for the project, and the default integrations for the project's checks."
+              properties:
+                url:
+                  type: string
+                  minLength: 1
+                  maxLength: 2048
+                  pattern: '^https?://\S+$'
+                  description: "The base URL of the Healthchecks instance, such as https://healthchecks.example.com. The operator sends every management API call to this URL."
+                apiKeySecret:
+                  type: object
+                  required: [name, key]
+                  description: "The Secret that holds the project's API key. The operator reads the Secret from its own namespace, because a cluster-scoped resource has no namespace of its own. The key must be a read-write key: a read-only key omits ping_url and cannot create checks."
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      description: "The Secret's name, in the operator's own namespace."
+                    key:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      description: "The key inside the Secret's data that holds the API key."
+                channels:
+                  type: array
+                  maxItems: 32
+                  x-kubernetes-list-type: atomic
+                  description: "The default integrations for every check in the project, by name. The operator resolves each name to a channel ID with GET /api/v3/channels/. A name that matches no channel sets Ready to False, and the message names it. A Check can replace this list with its own."
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 100
+            status:
+              type: object
+              description: "The channels the operator resolved for this project, and whether the project is ready. Only the operator writes it."
+              properties:
+                channels:
+                  type: array
+                  x-kubernetes-list-type: atomic
+                  description: "The channels spec.channels resolved to, each with the ID Healthchecks reports for it. Empty until the operator resolves the list."
+                  items:
+                    type: object
+                    required: [name, id]
+                    properties:
+                      name:
+                        type: string
+                        description: "The channel name, as spec.channels names it."
+                      id:
+                        type: string
+                        description: "The channel's ID on the Healthchecks instance."
+                conditions:
+                  type: array
+                  description: "Ready is True once the project's URL and API key work, and every name in spec.channels resolves to a channel."
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
+                  items:
+                    type: object
+                    required: [type, status, lastTransitionTime]
+                    properties:
+                      type:
+                        type: string
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                        description: >-
+                          The check this entry reports, in CamelCase. It
+                          is the key of this list.
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                        description: >-
+                          The verdict. True is the good verdict, and
+                          Unknown means the operator cannot tell yet.
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 0
+                        description: >-
+                          The metadata.generation this condition judged.
+                      reason:
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                        description: >-
+                          One CamelCase word for why the condition holds
+                          this verdict, meant for a program to match on.
+                      message:
+                        type: string
+                        maxLength: 32768
+                        description: >-
+                          The same answer in a sentence a person reads.
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: >-
+                          When the verdict last changed. It moves only
+                          when the status flips.

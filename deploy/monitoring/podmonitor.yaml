@@ -1,0 +1,16 @@
+# A component's resources do not take the base's namespace, so the
+# PodMonitor names its own. A kustomization that takes the component
+# and sets a namespace moves it with the operator.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: healthchecks-operator
+  namespace: healthchecks-operator
+  labels:
+    app.kubernetes.io/name: healthchecks-operator
+spec:
+  selector:
+    matchLabels:
+      app: healthchecks-operator
+  podMetricsEndpoints:
+    - port: metrics

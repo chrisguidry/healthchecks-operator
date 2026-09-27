@@ -1,0 +1,13 @@
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata:
+  name: database-backup
+  namespace: example
+spec:
+  projectRef:
+    kind: ClusterProject
+    name: internal
+  description: Nightly database backup
+  tags: [backup]
+  cronJob:
+    name: database-backup
