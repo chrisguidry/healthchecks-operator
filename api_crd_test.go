@@ -151,6 +151,7 @@ func TestThePrinterColumns(t *testing.T) {
 		}},
 		{checksCRD, []column{
 			{"Project", ".spec.projectRef.name", 0},
+			{"Probe", ".status.probe", 0},
 			{"Ready", condition("Ready"), 0},
 			{"Passing", condition("Passing"), 0},
 			{"Age", age, 0},

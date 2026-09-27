@@ -241,7 +241,11 @@ type CheckStatus struct {
 	// Project is the ClusterProject that holds the check in status. A
 	// changed projectRef deletes the check from this project before it
 	// creates the check in the new one.
-	Project         string      `json:"project,omitempty"`
+	Project string `json:"project,omitempty"`
+	// Probe names the probe block the spec sets, for kubectl's printer
+	// columns: a JSONPath cannot tell which of http, tls, and cronJob is
+	// set.
+	Probe           string      `json:"probe,omitempty"`
 	Slug            string      `json:"slug,omitempty"`
 	UUID            string      `json:"uuid,omitempty"`
 	PingURL         string      `json:"pingURL,omitempty"`

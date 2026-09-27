@@ -187,8 +187,8 @@ backup-29842019: BackoffLimitExceeded: Job has reached the specified backoff lim
 ```
 
 The same reason is the message of the `Check`'s `Passing` condition.
-`kubectl get checks -A` lists every check with its `Ready` and `Passing`
-state.
+`kubectl get checks -A` lists every check with its probe kind and its `Ready`
+and `Passing` state.
 
 ## Heartbeat
 

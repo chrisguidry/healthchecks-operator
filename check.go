@@ -162,6 +162,7 @@ func (c *controller) reconcileCheck(ctx context.Context, check *Check, w *world)
 	if kind != ProbeKindHTTP && kind != ProbeKindTLS {
 		next.Conditions = withoutCondition(next.Conditions, passingCondition)
 	}
+	next.Probe = kind.String()
 	next.LastReportedJob = ""
 	if kind == ProbeKindCronJob {
 		next.LastReportedJob = state.runs.lastReportedJob

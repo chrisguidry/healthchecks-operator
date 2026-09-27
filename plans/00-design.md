@@ -218,6 +218,8 @@ the same as the current one.
 `Check` status:
 
 - `slug`, `uuid`, `pingURL`: the check in Healthchecks.
+- `probe`: which probe block the spec sets, `http`, `tls`, or `cronJob`, so
+  `kubectl get checks` can show it in a column.
 - `lastReportedJob`: the name of the last Job the operator pinged for, for
   a `cronJob` check.
 - Conditions:

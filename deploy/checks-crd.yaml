@@ -28,6 +28,9 @@ spec:
         - name: Project
           type: string
           jsonPath: .spec.projectRef.name
+        - name: Probe
+          type: string
+          jsonPath: .status.probe
         - name: Ready
           type: string
           jsonPath: .status.conditions[?(@.type=="Ready")].status
@@ -253,6 +256,10 @@ spec:
                 project:
                   type: string
                   description: "The ClusterProject that holds the check in Healthchecks. When spec.projectRef names another project, the operator deletes the check from this one before it creates the check in the new one. Empty until the first reconcile."
+                probe:
+                  type: string
+                  enum: [http, tls, cronJob]
+                  description: "The probe block the spec sets: http, tls, or cronJob. The operator writes it so kubectl get checks can show it."
                 slug:
                   type: string
                   description: "The slug the operator last wrote this check under on Healthchecks. Empty until the first reconcile."

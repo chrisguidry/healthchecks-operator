@@ -271,3 +271,30 @@ func TestAConflictWaitsForTheNewerCheck(t *testing.T) {
 	mustMatch(t, h.api.requestCount("PATCH", path, false), 2)
 	mustMatch(t, h.check("example", "website").Metadata.holds(checkFinalizer), true)
 }
+
+// status.probe names the probe kind, because a printer column is a
+// JSONPath and cannot tell which of http, tls, and cronJob is set.
+func TestAPassRecordsWhichProbeACheckRuns(t *testing.T) {
+	tlsCheck := httpCheck("example", "website", "")
+	tlsCheck.Spec.HTTP = nil
+	tlsCheck.Spec.TLS = &TLSProbe{Interval: "24h", Host: "example.com", MinRemaining: "336h"}
+	cases := []struct {
+		check Check
+		want  string
+	}{
+		{httpCheck("example", "website", "https://example.com/"), "http"},
+		{tlsCheck, "tls"},
+		{backupCheck(), "cronJob"},
+	}
+	for _, one := range cases {
+		t.Run(one.want, func(t *testing.T) {
+			h := startHarness(t)
+			h.api.create(cronJobsResource, backupCronJob())
+			h.api.create(checksResource, one.check)
+
+			h.pass()
+
+			mustMatch(t, h.check(one.check.Metadata.Namespace, one.check.Metadata.Name).Status.Probe, one.want)
+		})
+	}
+}
