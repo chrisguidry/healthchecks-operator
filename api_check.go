@@ -112,7 +112,7 @@ type ProjectRef struct {
 
 // CheckSpec names the project, the check's identity and defaults on
 // Healthchecks, and the one probe that feeds it. A CEL rule holds a
-// Check to exactly one of HTTP, TLS, and CronJob; ProbeKind reads
+// Check to exactly one of HTTP, TLS, CronJob, and Ping; ProbeKind reads
 // whichever one is set.
 type CheckSpec struct {
 	ProjectRef  ProjectRef `json:"projectRef"`
@@ -127,6 +127,7 @@ type CheckSpec struct {
 	HTTP     *HTTPProbe    `json:"http,omitempty"`
 	TLS      *TLSProbe     `json:"tls,omitempty"`
 	CronJob  *CronJobProbe `json:"cronJob,omitempty"`
+	Ping     *PingProbe    `json:"ping,omitempty"`
 }
 
 // ProbeKind names which probe block a CheckSpec carries.
@@ -137,6 +138,7 @@ const (
 	ProbeKindHTTP
 	ProbeKindTLS
 	ProbeKindCronJob
+	ProbeKindPing
 )
 
 func (k ProbeKind) String() string {
@@ -147,14 +149,16 @@ func (k ProbeKind) String() string {
 		return "tls"
 	case ProbeKindCronJob:
 		return "cronJob"
+	case ProbeKindPing:
+		return "ping"
 	default:
 		return "none"
 	}
 }
 
 // ProbeKind answers which probe block is set, so a caller switches on
-// one typed value instead of chaining nil checks across HTTP, TLS, and
-// CronJob.
+// one typed value instead of chaining nil checks across HTTP, TLS,
+// CronJob, and Ping.
 func (s CheckSpec) ProbeKind() ProbeKind {
 	switch {
 	case s.HTTP != nil:
@@ -163,6 +167,8 @@ func (s CheckSpec) ProbeKind() ProbeKind {
 		return ProbeKindTLS
 	case s.CronJob != nil:
 		return ProbeKindCronJob
+	case s.Ping != nil:
+		return ProbeKindPing
 	default:
 		return ProbeKindNone
 	}
@@ -236,6 +242,40 @@ type CronJobProbe struct {
 	Name string `json:"name"`
 }
 
+// PingProbe is a check that the workload pings itself. The operator
+// runs no probe and sends no ping. It sets the check's period from
+// Schedule or Timeout, and it writes the ping URL into ConfigMap when
+// one is named, so the workload reads the URL from there. A CEL rule
+// holds a PingProbe to exactly one of Schedule and Timeout.
+type PingProbe struct {
+	ConfigMap *PingConfigMap `json:"configMap,omitempty"`
+	// Schedule is a cron expression, with the same translation a
+	// CronJob's schedule gets.
+	Schedule string `json:"schedule,omitempty"`
+	// TimeZone goes only with Schedule. Absent means UTC.
+	TimeZone string `json:"timeZone,omitempty"`
+	// Timeout is a Go duration string, at least 1m.
+	Timeout string `json:"timeout,omitempty"`
+}
+
+// PingConfigMap names the ConfigMap in the Check's namespace that the
+// operator writes the ping URL into, and the key it writes.
+type PingConfigMap struct {
+	Name string `json:"name"`
+	Key  string `json:"key,omitempty"`
+}
+
+// defaultPingURLKey is the key a PingConfigMap with no key writes.
+const defaultPingURLKey = "HEALTHCHECK_URL"
+
+// EffectiveKey is the key the operator writes the ping URL under.
+func (m PingConfigMap) EffectiveKey() string {
+	if m.Key != "" {
+		return m.Key
+	}
+	return defaultPingURLKey
+}
+
 // CheckStatus is the check's identity on Healthchecks, and whether it
 // is ready and passing. The Passing condition holds the result of the
 // last probe: its message is the failure reason, and its
@@ -247,12 +287,16 @@ type CheckStatus struct {
 	// creates the check in the new one.
 	Project string `json:"project,omitempty"`
 	// Probe names the probe block the spec sets, for kubectl's printer
-	// columns: a JSONPath cannot tell which of http, tls, and cronJob is
-	// set.
-	Probe           string      `json:"probe,omitempty"`
-	Slug            string      `json:"slug,omitempty"`
-	UUID            string      `json:"uuid,omitempty"`
-	PingURL         string      `json:"pingURL,omitempty"`
-	LastReportedJob string      `json:"lastReportedJob,omitempty"`
-	Conditions      []Condition `json:"conditions,omitempty"`
+	// columns: a JSONPath cannot tell which of http, tls, cronJob, and
+	// ping is set.
+	Probe           string `json:"probe,omitempty"`
+	Slug            string `json:"slug,omitempty"`
+	UUID            string `json:"uuid,omitempty"`
+	PingURL         string `json:"pingURL,omitempty"`
+	LastReportedJob string `json:"lastReportedJob,omitempty"`
+	// ConfigMap is the name of the ConfigMap the operator wrote the ping
+	// URL into, for a ping check. When spec.ping.configMap names another
+	// one, or none, the operator deletes the ConfigMap named here.
+	ConfigMap  string      `json:"configMap,omitempty"`
+	Conditions []Condition `json:"conditions,omitempty"`
 }

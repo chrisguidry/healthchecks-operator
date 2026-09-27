@@ -24,16 +24,18 @@ const checkFinalizer = "healthchecks.guid.foo/check"
 
 // The reasons a Check's Ready condition gives.
 const (
-	reasonSynced          = "Synced"
-	reasonProjectNotFound = "ProjectNotFound"
-	reasonProjectNotReady = "ProjectNotReady"
-	reasonCronJobNotFound = "CronJobNotFound"
-	reasonCronJobHistory  = "CronJobHistory"
-	reasonInvalidSpec     = "InvalidSpec"
-	reasonUpsertFailed    = "UpsertFailed"
-	reasonDeleteFailed    = "DeleteFailed"
-	reasonFinalizerFailed = "FinalizerFailed"
-	reasonProbeInvalid    = "ProbeInvalid"
+	reasonSynced            = "Synced"
+	reasonProjectNotFound   = "ProjectNotFound"
+	reasonProjectNotReady   = "ProjectNotReady"
+	reasonCronJobNotFound   = "CronJobNotFound"
+	reasonCronJobHistory    = "CronJobHistory"
+	reasonInvalidSpec       = "InvalidSpec"
+	reasonUpsertFailed      = "UpsertFailed"
+	reasonDeleteFailed      = "DeleteFailed"
+	reasonFinalizerFailed   = "FinalizerFailed"
+	reasonProbeInvalid      = "ProbeInvalid"
+	reasonConfigMapFailed   = "ConfigMapFailed"
+	reasonConfigMapConflict = "ConfigMapConflict"
 )
 
 // checkState is what the operator holds for one Check between passes.
@@ -162,7 +164,9 @@ func (c *controller) reconcileCheck(ctx context.Context, check *Check, w *world)
 		v = c.syncCheck(ctx, check, state, project, w, &next)
 	}
 	next.Conditions = withCondition(next.Conditions, checkReady(v, state.generation, c.now()))
-	if kind == ProbeKindCronJob && !fromRun(next.Conditions) {
+	// Only a probe or a reported run sets Passing. The operator sees
+	// none of a ping check's pings, so it has no Passing at all.
+	if (kind == ProbeKindCronJob && !fromRun(next.Conditions)) || kind == ProbeKindPing {
 		next.Conditions = withoutCondition(next.Conditions, passingCondition)
 	}
 	next.Probe = kind.String()
@@ -191,9 +195,10 @@ func (c *controller) projectFor(check *Check) (*projectState, verdict) {
 	return project, synced
 }
 
-// syncCheck upserts the check when its request changed, then registers
-// the probe or reports the CronJob's runs. It fills in next's slug,
-// uuid, and ping URL.
+// syncCheck upserts the check when its request changed, writes the
+// ping URL into a ping check's ConfigMap, then registers the probe or
+// reports the CronJob's runs. It fills in next's slug, uuid, ping URL,
+// and ConfigMap.
 func (c *controller) syncCheck(ctx context.Context, check *Check, state *checkState, project *projectState, w *world, next *CheckStatus) verdict {
 	request, v := c.upsertRequest(check, project, w)
 	if !v.ready() {
@@ -202,8 +207,17 @@ func (c *controller) syncCheck(ctx context.Context, check *Check, state *checkSt
 	if v := c.upsertCheck(ctx, state, check.Spec.ProjectRef.Name, project, request, next); !v.ready() {
 		return v
 	}
-	if check.Spec.ProbeKind() == ProbeKindCronJob {
+	if v := c.syncConfigMap(ctx, check, state, w, next); !v.ready() {
+		return v
+	}
+	switch check.Spec.ProbeKind() {
+	case ProbeKindPing:
+		return synced
+	case ProbeKindCronJob:
 		finished := c.reportRuns(ctx, state, w.cronJobs[cronJobKey(check)], w.jobs[state.namespace], next.PingURL)
+		if finished == nil && !fromRun(next.Conditions) {
+			finished = lastReported(w.jobs[state.namespace], state.runs.lastReportedJob)
+		}
 		if finished != nil {
 			next.Conditions = withCondition(next.Conditions, runPassing(*finished, state.generation, c.now()))
 		}

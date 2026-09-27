@@ -1,9 +1,10 @@
 # healthchecks-operator design
 
 healthchecks-operator creates checks on a [Healthchecks](https://healthchecks.io)
-instance from Kubernetes resources, and it sends the pings for those checks
-itself. It probes HTTP endpoints and TLS certificates on a timer, and it
-reports the result of each run of a CronJob.
+instance from Kubernetes resources, and it sends the pings for most of those
+checks itself. It probes HTTP endpoints and TLS certificates on a timer, and it
+reports the result of each run of a CronJob. For a workload that pings
+Healthchecks itself, it writes the check's ping URL into a ConfigMap.
 
 ## What it replaces
 
@@ -17,7 +18,9 @@ On a cluster without this operator, each monitored thing needs three parts:
 
 With the operator, each monitored thing is one `Check` resource next to the
 workload it watches. The operator creates the check, runs the probe, and
-sends the ping. No workload reads a ping URL.
+sends the ping. No workload reads a ping URL, except one that pings
+Healthchecks itself, and that one reads it from a ConfigMap the operator
+writes.
 
 ## Resources
 
@@ -83,17 +86,19 @@ spec:
   tags: [internet, website]
   grace: 15m
   channels: [Pushover]            # optional; replaces the project's list
-  http: { ... }                   # exactly one of http, tls, cronJob
+  http: { ... }                   # exactly one of http, tls, cronJob, ping
 ```
 
 - `projectRef.kind` has one legal value today, `ClusterProject`. The field
   exists so that `Project` can be added without a schema change. When
   `Project` exists, a `Check` can name a `Project` only in its own namespace.
 - A CEL rule (`x-kubernetes-validations`) requires exactly one of `http`,
-  `tls`, and `cronJob`. The Kubernetes volume source uses the same pattern.
-- The `Check` does not set a Healthchecks schedule. The operator derives the
-  schedule from the probe, so the check and the thing it watches cannot
-  disagree.
+  `tls`, `cronJob`, and `ping`. The Kubernetes volume source uses the same
+  pattern.
+- An `http`, `tls`, or `cronJob` `Check` does not set a Healthchecks
+  schedule. The operator derives the schedule from the probe, so the check
+  and the thing it watches cannot disagree. A `ping` `Check` states its own,
+  because the operator does not see the workload that pings.
 
 #### http
 
@@ -181,6 +186,66 @@ cronJob:
   limit is 0, `Ready` is `False` and the message says why.
 - The operator matches Jobs to the CronJob by owner reference.
 
+#### ping
+
+The workload pings the check itself: a Deployment that pings after its own
+backup, a script that sends `/start` and `/fail` with a log as the body, or
+an application whose settings take a ping URL. The operator manages the
+check, and writes its ping URL into a ConfigMap when the spec names one. It
+sends no ping and runs no probe.
+
+```yaml
+ping:
+  configMap:                        # optional; without it, nothing is written
+    name: database-backup-healthcheck
+    key: HEALTHCHECK_URL            # optional; default HEALTHCHECK_URL
+  schedule: "0 3 * * *"             # exactly one of schedule and timeout
+  timeZone: America/New_York        # optional, with schedule only; default UTC
+  timeout: 24h                      # Go duration, at least 1m
+```
+
+- CEL rules require exactly one of `schedule` and `timeout`, allow
+  `timeZone` only with `schedule`, and hold `timeout` to at least `1m`.
+- `schedule` and `timeZone` become the check's `schedule` and `tz`, with the
+  same translation as a CronJob's schedule (see Cron syntax). `timeout`
+  becomes the check's `timeout`.
+- The ConfigMap is in the `Check`'s namespace. The operator writes it with
+  server-side apply, field manager `healthchecks-operator` and `force`, so it
+  takes over a ConfigMap that Terraform or a person created. The apply states
+  one key, the ping URL from `.status.pingURL`, the label
+  `app.kubernetes.io/managed-by: healthchecks-operator`, and an owner
+  reference to the `Check` with `controller: true` and
+  `blockOwnerDeletion: false`. The garbage collector deletes the ConfigMap
+  after the `Check` is gone. `blockOwnerDeletion: true` would need RBAC on
+  the `Check`'s finalizers, and nothing needs the `Check` to wait.
+- The operator watches only the ConfigMaps with that label. It applies the
+  ConfigMap when the store does not hold one with the ping URL under the key
+  and an owner reference from the `Check`, so a steady pass writes nothing. A
+  ConfigMap that another tool created has no label, so the store does not
+  hold it, and the first pass applies it. The store takes the apply's answer
+  at once, so the pass after it does not write again while the watch event
+  is on its way.
+- The operator does not write a ConfigMap that another object controls,
+  and the `Check`'s `Ready` is `False` with a message that names the
+  controller. Every `Check` applies as the same field manager, so two
+  `Check`s on one ConfigMap would each replace the other's owner reference
+  on every pass.
+- The operator does not write a ConfigMap while `.status.pingURL` is
+  empty, and `Ready` is `False`.
+- `.status.configMap` names the ConfigMap the operator wrote. When
+  `spec.ping.configMap` names another ConfigMap, or none, or the `Check`
+  changes to another kind, the operator writes the new ConfigMap first,
+  then releases the one status names. A failed write leaves the old one as
+  it is. The operator releases a ConfigMap only when the store holds it
+  with this `Check` as its controller. One that holds a key the operator
+  did not write gets an apply that states no fields, which removes the
+  key, the label, and the owner reference that the operator owns, and
+  leaves the rest. Any other one is deleted with `preconditions.uid` set to
+  the uid in the store, so an object made again under the name stays.
+- The operator does not see the workload's pings, so a `ping` check has no
+  `Passing` condition. A `Passing` condition that an earlier kind left is
+  removed.
+
 ## Identity
 
 The slug identifies a `Check`'s check in Healthchecks. Every reconcile of a
@@ -220,17 +285,19 @@ the same as the current one.
 `Check` status:
 
 - `slug`, `uuid`, `pingURL`: the check in Healthchecks.
-- `probe`: which probe block the spec sets, `http`, `tls`, or `cronJob`, so
-  `kubectl get checks` can show it in a column.
+- `probe`: which probe block the spec sets, `http`, `tls`, `cronJob`, or
+  `ping`, so `kubectl get checks` can show it in a column.
 - `lastReportedJob`: the name of the last Job the operator pinged for, for
   a `cronJob` check.
+- `configMap`: the name of the ConfigMap the operator wrote the ping URL
+  into, for a `ping` check.
 - Conditions:
   - `Ready`: the check exists in Healthchecks and matches the spec.
   - `Passing`: for `http` and `tls`, the last probe passed. For `cronJob`,
     the last run the operator reported succeeded. When it is `False`, the
     message is the failure reason, the same text as the ping body. A
     `cronJob` check has no `Passing` until the operator reports its first
-    finished run.
+    finished run. A `ping` check has no `Passing`.
 
 The operator writes status only when something in it changes. A probe
 that gets the same result as the one before writes nothing, so a steady
@@ -302,19 +369,22 @@ The operator follows the patterns of the liken-sh operators
   line for each object and error.
 - An event changes its store and then wakes the reconcile loop, through
   a channel with a buffer of one. Each pass reads `ClusterProject`s,
-  `Check`s, CronJobs, and Jobs from the stores, with no request to the
+  `Check`s, CronJobs, Jobs, and the operator's ConfigMaps from the stores, with no request to the
   API server, reconciles each one, and stops the probes of `Check`s that
   are gone. A 30-second ticker also wakes the loop, for the parts of a
   pass that time moves: a backoff that ends, and the heartbeat. A pass
   calls the Healthchecks management API only when a spec, a CronJob
   schedule, or a channel list changed.
 - A pass reads a Secret by name from the API server, and writes
-  finalizers and status there. A finalizer patch states the
+  finalizers, status, and a `ping` check's ConfigMap there. A finalizer patch states the
   `resourceVersion` from the store. When the store is behind, the patch
   gets `409 Conflict`, and the pass leaves the object alone. The newer
   version's event wakes the next pass, which reads it from the store.
 - The operator watches Jobs in all namespaces and matches each Job to a
   `Check` by owner reference.
+- The operator watches ConfigMaps in all namespaces with the label selector
+  `app.kubernetes.io/managed-by=healthchecks-operator`, so its memory holds
+  the ConfigMaps it wrote and no others.
 - `http` and `tls` probes run from one timer heap in one goroutine. Each
   probe is an entry at its next due time. There is no goroutine and no
   requeue for each `Check`.
@@ -331,6 +401,12 @@ The operator follows the patterns of the liken-sh operators
   name when it needs one, and it does not list or watch Secrets, so it does
   not keep every Secret in memory. A changed Secret takes effect on the next
   probe.
+- `configmaps`: list, watch, create, patch, and delete, in all namespaces.
+  patch is the server-side apply of a `ping` check's ConfigMap, and the API
+  server authorizes an apply to a ConfigMap that does not exist as create.
+  delete removes the one it wrote before when the name changes. RBAC cannot limit a list or
+  a watch to a label, so these verbs reach every ConfigMap. The label
+  selector on the watch keeps the others out of memory.
 
 ### Probe interface
 

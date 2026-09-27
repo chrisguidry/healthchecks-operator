@@ -15,6 +15,7 @@ func TestCheckSpecProbeKind(t *testing.T) {
 		{"http", CheckSpec{HTTP: &HTTPProbe{}}, ProbeKindHTTP},
 		{"tls", CheckSpec{TLS: &TLSProbe{}}, ProbeKindTLS},
 		{"cronJob", CheckSpec{CronJob: &CronJobProbe{}}, ProbeKindCronJob},
+		{"ping", CheckSpec{Ping: &PingProbe{}}, ProbeKindPing},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -32,10 +33,27 @@ func TestProbeKindString(t *testing.T) {
 		{ProbeKindHTTP, "http"},
 		{ProbeKindTLS, "tls"},
 		{ProbeKindCronJob, "cronJob"},
+		{ProbeKindPing, "ping"},
 	}
 	for _, c := range cases {
 		t.Run(c.want, func(t *testing.T) {
 			mustMatch(t, c.kind.String(), c.want)
+		})
+	}
+}
+
+func TestPingConfigMapEffectiveKey(t *testing.T) {
+	cases := []struct {
+		name      string
+		configMap PingConfigMap
+		want      string
+	}{
+		{"defaults to HEALTHCHECK_URL", PingConfigMap{Name: "backup"}, "HEALTHCHECK_URL"},
+		{"an explicit key wins", PingConfigMap{Name: "backup", Key: "PING_URL"}, "PING_URL"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mustMatch(t, c.configMap.EffectiveKey(), c.want)
 		})
 	}
 }
@@ -81,9 +99,11 @@ func TestCheckEffectiveDisplayName(t *testing.T) {
 // status the API server refuses.
 func TestCheckStatusValidatesAgainstTheSchema(t *testing.T) {
 	status := CheckStatus{
-		Slug:    "example-website",
-		UUID:    "3ce96f5a-8bb0-4e69-8e9c-1a5b2a9d0000",
-		PingURL: "https://healthchecks.example.com/ping/3ce96f5a-8bb0-4e69-8e9c-1a5b2a9d0000",
+		Probe:     "ping",
+		ConfigMap: "database-backup-healthcheck",
+		Slug:      "example-website",
+		UUID:      "3ce96f5a-8bb0-4e69-8e9c-1a5b2a9d0000",
+		PingURL:   "https://healthchecks.example.com/ping/3ce96f5a-8bb0-4e69-8e9c-1a5b2a9d0000",
 		Conditions: []Condition{
 			{Type: "Ready", Status: ConditionTrue, ObservedGeneration: 3, LastTransitionTime: "2026-09-27T11:00:00Z"},
 			{Type: "Passing", Status: ConditionFalse, Reason: "ProbeFailed", Message: "https://example.com/: status 500, want 200", LastTransitionTime: "2026-09-27T12:00:00Z"},

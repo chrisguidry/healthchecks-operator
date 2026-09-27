@@ -280,6 +280,7 @@ func TestTheExamplesValidate(t *testing.T) {
 		{checksCRD, "deploy/examples/check-http.yaml"},
 		{checksCRD, "deploy/examples/check-tls.yaml"},
 		{checksCRD, "deploy/examples/check-cronjob.yaml"},
+		{checksCRD, "deploy/examples/check-ping.yaml"},
 	}
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) {

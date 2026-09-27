@@ -2,10 +2,11 @@ package main
 
 // fakeKube is a Kubernetes API server for tests. It holds objects of
 // any resource in memory and answers the requests that kubeClient
-// makes: get, list, watch, a merge patch with a resourceVersion
-// precondition, and server-side apply on the status subresource. A
-// test seeds objects, runs the code under test against fakeKube's
-// client, and reads back what the code wrote.
+// makes: get, list and watch with a label selector, a merge patch with
+// a resourceVersion precondition, server-side apply on an object or on
+// its status subresource, and delete. A test seeds objects, runs the
+// code under test against fakeKube's client, and reads back what the
+// code wrote.
 //
 // It keeps the API server's rules that the reconciler depends on:
 //
@@ -47,6 +48,10 @@ type fakeEvent struct {
 	key     fakeKey
 	kind    string
 	object  map[string]any
+	// previous is the object before the change, or nil for a create. A
+	// watch with a selector reads it to tell an object that stops
+	// matching.
+	previous map[string]any
 }
 
 // fakeRequest is one request as the client sent it.
@@ -72,8 +77,13 @@ type fakeKube struct {
 	oldest  int
 	objects map[fakeKey]map[string]any
 	// owners holds, for each object and field manager, the status
-	// fields that the manager applied last.
-	owners   map[fakeKey]map[string][][]string
+	// fields that the manager applied last, and applied holds the
+	// fields of a whole-object apply the same way.
+	owners  map[fakeKey]map[string][][]string
+	applied map[fakeKey]map[string][][]string
+	// refusals holds the status code for each "METHOD path" a test
+	// refuses.
+	refusals map[string]int
 	events   []fakeEvent
 	log      []fakeRequest
 	changed  chan struct{}
@@ -87,6 +97,8 @@ func startFakeKube(t *testing.T) *fakeKube {
 		now:      time.Now,
 		objects:  map[fakeKey]map[string]any{},
 		owners:   map[fakeKey]map[string][][]string{},
+		applied:  map[fakeKey]map[string][][]string{},
+		refusals: map[string]int{},
 		changed:  make(chan struct{}),
 		dropping: make(chan struct{}),
 	}
@@ -118,7 +130,7 @@ func (f *fakeKube) create(resource kubeResource, object any) {
 	meta["uid"] = fmt.Sprintf("uid-%d", f.version)
 	meta["generation"] = 1
 	meta["creationTimestamp"] = f.now().UTC().Format(time.RFC3339)
-	f.record(key, "ADDED", stored)
+	f.record(key, "ADDED", stored, nil)
 }
 
 // read decodes the stored object into out, and reports whether it
@@ -182,39 +194,6 @@ func (f *fakeKube) compact() {
 	f.events = nil
 }
 
-// requests returns every request the server received, in order.
-func (f *fakeKube) requests() []fakeRequest {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-	return slices.Clone(f.log)
-}
-
-// versions returns the resourceVersion of each object of a resource,
-// keyed by namespace/name.
-func (f *fakeKube) versions(resource kubeResource) map[string]string {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-	versions := map[string]string{}
-	for key, object := range f.objects {
-		if key.resource == resource {
-			versions[key.namespace+"/"+key.name] = stringAt(metadataOf(object), "resourceVersion")
-		}
-	}
-	return versions
-}
-
-// requestCount counts the requests of one method to one path, the
-// watches or the rest.
-func (f *fakeKube) requestCount(method, path string, watch bool) int {
-	count := 0
-	for _, request := range f.requests() {
-		if request.Method == method && request.Path == path && (request.Query.Get("watch") == "true") == watch {
-			count++
-		}
-	}
-	return count
-}
-
 // commit stores a change and records its event. A change to nothing
 // moves no version. The caller holds the mutex.
 func (f *fakeKube) commit(key fakeKey, before, after map[string]any) map[string]any {
@@ -234,25 +213,26 @@ func (f *fakeKube) commit(key fakeKey, before, after map[string]any) map[string]
 		meta["resourceVersion"] = strconv.Itoa(f.version)
 		delete(f.objects, key)
 		delete(f.owners, key)
-		f.notify(key, "DELETED", after)
+		delete(f.applied, key)
+		f.notify(key, "DELETED", after, before)
 		return after
 	}
-	f.record(key, "MODIFIED", after)
+	f.record(key, "MODIFIED", after, before)
 	return f.objects[key]
 }
 
 // record stores an object at the current version and records its
 // event. A stored object is never changed in place, so a handler can
 // encode it after it releases the mutex. The caller holds the mutex.
-func (f *fakeKube) record(key fakeKey, kind string, object map[string]any) {
+func (f *fakeKube) record(key fakeKey, kind string, object, previous map[string]any) {
 	object = clone(object)
 	metadataOf(object)["resourceVersion"] = strconv.Itoa(f.version)
 	f.objects[key] = object
-	f.notify(key, kind, object)
+	f.notify(key, kind, object, previous)
 }
 
-func (f *fakeKube) notify(key fakeKey, kind string, object map[string]any) {
-	f.events = append(f.events, fakeEvent{f.version, key, kind, clone(object)})
+func (f *fakeKube) notify(key fakeKey, kind string, object, previous map[string]any) {
+	f.events = append(f.events, fakeEvent{f.version, key, kind, clone(object), previous})
 	close(f.changed)
 	f.changed = make(chan struct{})
 }
@@ -262,15 +242,20 @@ func (f *fakeKube) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mutex.Lock()
 	f.log = append(f.log, fakeRequest{r.Method, r.URL.Path, r.URL.Query(), r.Header.Get("Content-Type"), string(body)})
 	f.mutex.Unlock()
+	if f.refused(w, r) {
+		return
+	}
 
 	key, status, parsed := parseKubePath(r.URL.Path)
 	switch {
 	case !parsed:
 		writeKubeStatus(w, http.StatusNotFound, "the fake API server has no route for "+r.URL.Path)
 	case r.Method == http.MethodGet && key.name == "" && r.URL.Query().Get("watch") == "true":
-		f.serveWatch(w, r, key)
+		f.serveWatch(w, r, key, parseSelector(r.URL.Query().Get("labelSelector")))
 	case r.Method == http.MethodGet && key.name == "":
-		f.serveList(w, key)
+		f.serveList(w, key, parseSelector(r.URL.Query().Get("labelSelector")))
+	case r.Method == http.MethodDelete && !status:
+		f.serveDelete(w, key, body)
 	case r.Method == http.MethodGet && !status:
 		f.serveGet(w, key)
 	case r.Method == http.MethodPatch:
@@ -315,12 +300,12 @@ func (f *fakeKube) serveGet(w http.ResponseWriter, key fakeKey) {
 	writeKubeJSON(w, object)
 }
 
-func (f *fakeKube) serveList(w http.ResponseWriter, collection fakeKey) {
+func (f *fakeKube) serveList(w http.ResponseWriter, collection fakeKey, selector map[string]string) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 	items := []map[string]any{}
 	for _, key := range f.sortedKeys() {
-		if collection.matches(key) {
+		if collection.matches(key) && selected(selector, f.objects[key]) {
 			items = append(items, f.objects[key])
 		}
 	}
@@ -347,7 +332,7 @@ func (f *fakeKube) sortedKeys() []fakeKey {
 // resourceVersion until the client leaves or dropWatches ends it. An
 // empty version or "0" starts with an ADDED event for each object, as
 // the API server does.
-func (f *fakeKube) serveWatch(w http.ResponseWriter, r *http.Request, collection fakeKey) {
+func (f *fakeKube) serveWatch(w http.ResponseWriter, r *http.Request, collection fakeKey, selector map[string]string) {
 	requested := r.URL.Query().Get("resourceVersion")
 	encoder := json.NewEncoder(w)
 	w.Header().Set("Content-Type", jsonContentType)
@@ -360,7 +345,7 @@ func (f *fakeKube) serveWatch(w http.ResponseWriter, r *http.Request, collection
 	last, err := strconv.Atoi(requested)
 	if requested == "" || requested == "0" {
 		for _, key := range f.sortedKeys() {
-			if collection.matches(key) {
+			if collection.matches(key) && selected(selector, f.objects[key]) {
 				pending = append(pending, fakeEvent{kind: "ADDED", object: f.objects[key]})
 			}
 		}
@@ -374,7 +359,9 @@ func (f *fakeKube) serveWatch(w http.ResponseWriter, r *http.Request, collection
 	for {
 		for _, event := range f.events {
 			if event.version > last && collection.matches(event.key) {
-				pending = append(pending, event)
+				if sent, matched := selectedEvent(selector, event); matched {
+					pending = append(pending, sent)
+				}
 			}
 		}
 		last = f.version

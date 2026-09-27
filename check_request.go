@@ -42,16 +42,25 @@ func (c *controller) upsertRequest(check *Check, project *projectState, w *world
 }
 
 // checkPeriod is how often the check expects a ping. A probe's interval
-// is the check's timeout, and a CronJob's schedule is the check's
-// schedule.
+// is the check's timeout, a CronJob's schedule is the check's schedule,
+// and a ping check states its own schedule or timeout.
 func checkPeriod(check *Check, w *world) (healthchecks.Period, verdict) {
-	if check.Spec.ProbeKind() != ProbeKindCronJob {
+	switch check.Spec.ProbeKind() {
+	case ProbeKindPing:
+		return pingPeriod(*check.Spec.Ping)
+	case ProbeKindCronJob:
+		return cronJobPeriod(check, w)
+	default:
 		interval, err := probeInterval(check.Spec)
 		if err != nil {
 			return healthchecks.Period{}, verdict{reasonInvalidSpec, errorText(err)}
 		}
 		return healthchecks.FixedTimeout(interval), synced
 	}
+}
+
+// cronJobPeriod copies the CronJob's schedule and time zone.
+func cronJobPeriod(check *Check, w *world) (healthchecks.Period, verdict) {
 	cronJob, found := w.cronJobs[cronJobKey(check)]
 	if !found {
 		return healthchecks.Period{}, verdict{reasonCronJobNotFound, fmt.Sprintf("CronJob %s does not exist", cronJobKey(check))}

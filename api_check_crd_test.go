@@ -47,6 +47,11 @@ func cronJobSpec() map[string]any {
 	}
 }
 
+// pingSpec is a ping check with the ping block given.
+func pingSpec(ping map[string]any) map[string]any {
+	return map[string]any{"projectRef": projectRef(), "ping": ping}
+}
+
 func TestCheckCRDValidatesExamples(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -56,6 +61,35 @@ func TestCheckCRDValidatesExamples(t *testing.T) {
 		{name: "an http check", object: check(httpSpec())},
 		{name: "a tls check", object: check(tlsSpec())},
 		{name: "a cronJob check", object: check(cronJobSpec())},
+		{name: "a ping check on a schedule", object: check(pingSpec(map[string]any{"schedule": "0 3 * * *"}))},
+		{name: "a ping check on a schedule in a time zone", object: check(pingSpec(map[string]any{"schedule": "0 3 * * *", "timeZone": "America/New_York"}))},
+		{name: "a ping check with a timeout", object: check(pingSpec(map[string]any{"timeout": "24h"}))},
+		{name: "a ping check with a timeout of exactly a minute", object: check(pingSpec(map[string]any{"timeout": "1m"}))},
+		{
+			name: "a ping check with a ConfigMap and a key",
+			object: check(pingSpec(map[string]any{
+				"timeout":   "24h",
+				"configMap": map[string]any{"name": "database-backup-healthcheck", "key": "HEALTHCHECK_URL"},
+			})),
+		},
+		{name: "a ping check with a ConfigMap and no key", object: check(pingSpec(map[string]any{"timeout": "24h", "configMap": map[string]any{"name": "database-backup-healthcheck"}}))},
+		{name: "a ping check with neither schedule nor timeout", object: check(pingSpec(map[string]any{})), wantErr: true},
+		{name: "a ping check with both schedule and timeout", object: check(pingSpec(map[string]any{"schedule": "0 3 * * *", "timeout": "24h"})), wantErr: true},
+		{name: "a ping check with a time zone and a timeout", object: check(pingSpec(map[string]any{"timeout": "24h", "timeZone": "America/New_York"})), wantErr: true},
+		{name: "a ping check with a timeout under a minute", object: check(pingSpec(map[string]any{"timeout": "30s"})), wantErr: true},
+		{name: "a ping check with a timeout that is not a duration", object: check(pingSpec(map[string]any{"timeout": "daily"})), wantErr: true},
+		{name: "a ping check with a ConfigMap and no name", object: check(pingSpec(map[string]any{"timeout": "24h", "configMap": map[string]any{"key": "URL"}})), wantErr: true},
+		{name: "a ping check with a ConfigMap name that is not a name", object: check(pingSpec(map[string]any{"timeout": "24h", "configMap": map[string]any{"name": "Backup Check"}})), wantErr: true},
+		{name: "a ping check with a key that is not a key", object: check(pingSpec(map[string]any{"timeout": "24h", "configMap": map[string]any{"name": "backup", "key": "ping url"}})), wantErr: true},
+		{
+			name: "a ping check with a cronJob too",
+			object: check(map[string]any{
+				"projectRef": projectRef(),
+				"cronJob":    map[string]any{"name": "database-backup"},
+				"ping":       map[string]any{"timeout": "24h"},
+			}),
+			wantErr: true,
+		},
 		{
 			name: "a request with a literal header",
 			object: check(map[string]any{

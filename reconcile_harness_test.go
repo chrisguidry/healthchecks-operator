@@ -173,7 +173,7 @@ func (h *harness) watch() {
 // the fake API server holds.
 func (h *harness) synced() bool {
 	for resource, watch := range h.c.watches {
-		if !maps.Equal(storedVersions(h.t, watch.store), h.api.versions(resource)) {
+		if !maps.Equal(storedVersions(h.t, watch.store), h.api.versions(resource, watch.selector)) {
 			return false
 		}
 	}

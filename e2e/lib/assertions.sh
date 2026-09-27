@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# The eight things this test proves. Each assert_* function is one
+# The claims this test proves. Each assert_* function is one
 # numbered claim from the e2e plan; the check_* functions under it are
 # what retry (e2e/lib/common.sh) polls until it holds or times out.
 
-READY_CHECKS=(healthchecks-ui broken-page kubernetes-api-cert backup flaky)
+READY_CHECKS=(healthchecks-ui broken-page kubernetes-api-cert backup flaky nightly-export weekly-report)
 
 assert_clusterproject_ready() {
   retry "ClusterProject e2e Ready=True" 60 clusterproject_ready
@@ -67,9 +67,11 @@ declare -A EXPECT_SLUG=(
   [kubernetes-api-cert]=example-kubernetes-api-cert
   [backup]=example-backup
   [flaky]=example-flaky
+  [nightly-export]=example-nightly-export
+  [weekly-report]=example-weekly-report
 )
-declare -A EXPECT_TIMEOUT=([healthchecks-ui]=60 [broken-page]=60 [kubernetes-api-cert]=60)
-declare -A EXPECT_SCHEDULE=([backup]="* * * * *" [flaky]="0 * * * *")
+declare -A EXPECT_TIMEOUT=([healthchecks-ui]=60 [broken-page]=60 [kubernetes-api-cert]=60 [nightly-export]=3600)
+declare -A EXPECT_SCHEDULE=([backup]="* * * * *" [flaky]="0 * * * *" [weekly-report]="0 4 * * 1")
 declare -A EXPECT_TAGS=([healthchecks-ui]="e2e http")
 
 assert_healthchecks_api_state() {
@@ -163,6 +165,58 @@ pings_show_start_then() {
     echo "pings for $slug, most recent first: $pings"
     return 1
   fi
+}
+
+# assert_workload_pings proves the ping kind end to end: the operator
+# takes over a ConfigMap it did not create, creates one that does not
+# exist, and writes the check's ping URL into each, and a Pod that reads
+# the URL from a ConfigMap reaches the check.
+assert_workload_pings() {
+  local job_name="nightly-export-$RUN_ID"
+  retry "ConfigMap nightly-export-healthcheck holds the ping URL" 60 configmap_holds_ping_url nightly-export nightly-export-healthcheck
+  retry "ConfigMap weekly-report-healthcheck exists and holds the ping URL" 60 configmap_holds_ping_url weekly-report weekly-report-healthcheck
+
+  log "starting a Job that pings the URL from the ConfigMap: $job_name"
+  kubectl -n "$CHECK_NS" apply -f - >/dev/null <<YAML
+apiVersion: batch/v1
+kind: Job
+metadata: {name: $job_name, namespace: $CHECK_NS}
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      hostAliases: [{ip: "$HC_IP", hostnames: [hc-e2e-healthchecks]}]
+      containers:
+        - name: ping
+          image: busybox:1.36
+          command: [sh, -c, 'wget -q -O- "\$HEALTHCHECK_URL"']
+          envFrom: [{configMapRef: {name: nightly-export-healthcheck}}]
+YAML
+  kubectl -n "$CHECK_NS" wait --for=condition=Complete "job/$job_name" --timeout=60s >/dev/null
+
+  retry "example-nightly-export has a success ping" 30 latest_ping_is example-nightly-export success
+  log "ok: a Pod reads the ping URL from the ConfigMap the operator wrote, and its ping reaches the check"
+}
+
+configmap_holds_ping_url() {
+  local check=$1 name=$2 want got managed owner
+  want=$(kubectl -n "$CHECK_NS" get check "$check" -o jsonpath='{.status.pingURL}')
+  got=$(kubectl -n "$CHECK_NS" get configmap "$name" -o jsonpath='{.data.HEALTHCHECK_URL}')
+  managed=$(kubectl -n "$CHECK_NS" get configmap "$name" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}')
+  owner=$(kubectl -n "$CHECK_NS" get configmap "$name" -o jsonpath='{.metadata.ownerReferences[?(@.controller==true)].name}')
+  if [ -z "$want" ] || [ "$got" != "$want" ] || [ "$managed" != "healthchecks-operator" ] || [ "$owner" != "$check" ]; then
+    echo "ConfigMap $name has URL [$got], label [$managed], and owner [$owner]; want [$want], healthchecks-operator, and $check"
+    return 1
+  fi
+}
+
+latest_ping_is() {
+  local slug=$1 want=$2 uuid latest
+  uuid=$(check_uuid "$slug")
+  [ -n "$uuid" ] || { echo "no check at slug $slug"; return 1; }
+  latest=$(hc_api "/api/v3/checks/$uuid/pings/" | jq -r '.pings[0].type // empty')
+  [ "$latest" = "$want" ] || { echo "the latest ping for $slug is [$latest], want $want"; return 1; }
 }
 
 assert_heartbeat() {

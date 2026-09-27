@@ -84,3 +84,21 @@ func pingLabel(kind healthchecks.PingKind) string {
 	}
 	return pingSuccess
 }
+
+// lastReported is the outcome of the Job the operator last reported,
+// for a Check with no Passing yet: one whose last run was reported
+// before Passing followed runs. It is nil when that Job is gone or has
+// not finished. It sends nothing; the run was reported already.
+func lastReported(jobs []batchJob, name string) *jobPing {
+	for _, job := range jobs {
+		if job.Metadata.Name != name {
+			continue
+		}
+		finished, kind, body := job.outcome()
+		if !finished {
+			return nil
+		}
+		return &jobPing{job: name, kind: kind, body: body}
+	}
+	return nil
+}

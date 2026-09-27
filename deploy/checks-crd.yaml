@@ -51,7 +51,7 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
-          description: "One Healthchecks check and the probe that feeds it. The operator creates and updates the check in Healthchecks, runs the probe, and sends the ping. A Check names exactly one probe: http, tls, or cronJob."
+          description: "One Healthchecks check and the probe that feeds it. The operator creates and updates the check in Healthchecks, runs the probe, and sends the ping. A Check names exactly one probe: http, tls, cronJob, or ping."
           required: [spec]
           properties:
             spec:
@@ -62,8 +62,8 @@ spec:
                 # The Kubernetes volume source uses the same one-of
                 # pattern: one probe block names the check's source of
                 # truth, and this rule holds a Check to one of them.
-                - rule: "[has(self.http), has(self.tls), has(self.cronJob)].exists_one(block, block)"
-                  message: "a Check names exactly one of http, tls, or cronJob"
+                - rule: "[has(self.http), has(self.tls), has(self.cronJob), has(self.ping)].exists_one(block, block)"
+                  message: "a Check names exactly one of http, tls, cronJob, or ping"
                 # ClusterProject is the only kind projectRef accepts
                 # today. A namespaced Project kind may join it later
                 # without a change to this field's type.
@@ -252,6 +252,48 @@ spec:
                       minLength: 1
                       maxLength: 253
                       description: "The CronJob's name, in the Check's own namespace."
+                ping:
+                  type: object
+                  description: "The workload pings the check itself, and the operator sends no ping and runs no probe. The operator sets the check's period from schedule or timeout, and writes the check's ping URL into configMap when it is set."
+                  x-kubernetes-validations:
+                    - rule: "has(self.schedule) != has(self.timeout)"
+                      message: "ping names exactly one of schedule and timeout"
+                    - rule: "!has(self.timeZone) || has(self.schedule)"
+                      message: "ping.timeZone goes only with ping.schedule"
+                    - rule: "!has(self.timeout) || duration(self.timeout) >= duration('1m')"
+                      message: "ping.timeout is at least 1m"
+                  properties:
+                    configMap:
+                      type: object
+                      required: [name]
+                      description: "The ConfigMap in the Check's own namespace that the operator writes the ping URL into, with server-side apply. The operator takes over a ConfigMap that already exists, and the ConfigMap has an owner reference to the Check, so it goes when the Check goes. Absent means the operator writes nothing."
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                          maxLength: 253
+                          pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+                          description: "The ConfigMap's name. When it changes, the operator deletes the ConfigMap it wrote under the old name."
+                        key:
+                          type: string
+                          minLength: 1
+                          maxLength: 253
+                          pattern: '^[-._a-zA-Z0-9]+$'
+                          description: "The key that holds the ping URL. Default is HEALTHCHECK_URL."
+                    schedule:
+                      type: string
+                      minLength: 1
+                      maxLength: 100
+                      description: "The cron schedule the workload pings on, such as \"0 3 * * *\", and the check's schedule on Healthchecks. The operator translates the @ macros and ? the way it translates a CronJob's schedule."
+                    timeZone:
+                      type: string
+                      minLength: 1
+                      maxLength: 100
+                      description: "The time zone of schedule, such as America/New_York. Default is UTC."
+                    timeout:
+                      type: string
+                      pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
+                      description: "How often the workload pings, a Go duration string such as 24h, and the check's timeout on Healthchecks. This is at least 1m."
             status:
               type: object
               description: "The check's identity on Healthchecks, and whether it is ready and passing. Only the operator writes it."
@@ -261,8 +303,8 @@ spec:
                   description: "The ClusterProject that holds the check in Healthchecks. When spec.projectRef names another project, the operator deletes the check from this one before it creates the check in the new one. Empty until the first reconcile."
                 probe:
                   type: string
-                  enum: [http, tls, cronJob]
-                  description: "The probe block the spec sets: http, tls, or cronJob. The operator writes it so kubectl get checks can show it."
+                  enum: [http, tls, cronJob, ping]
+                  description: "The probe block the spec sets: http, tls, cronJob, or ping. The operator writes it so kubectl get checks can show it."
                 slug:
                   type: string
                   description: "The slug the operator last wrote this check under on Healthchecks. Empty until the first reconcile."
@@ -275,9 +317,12 @@ spec:
                 lastReportedJob:
                   type: string
                   description: "The name of the last Job the operator pinged for, for a cronJob check. Empty until the operator reports a run."
+                configMap:
+                  type: string
+                  description: "The name of the ConfigMap the operator wrote the ping URL into, for a ping check. When spec.ping.configMap names another ConfigMap, or none, the operator deletes this one."
                 conditions:
                   type: array
-                  description: "Ready is True once the check exists in Healthchecks and matches the spec. Passing holds the result of the last probe: True when it passed, and False with the failure reason as the message when it failed. Its lastTransitionTime is when the result changed. Passing is absent for a cronJob check, since a cronJob check has no probe of its own, and until the first probe runs."
+                  description: "Ready is True once the check exists in Healthchecks and matches the spec. Passing holds the result of the last probe: True when it passed, and False with the failure reason as the message when it failed. Its lastTransitionTime is when the result changed. For a cronJob check, Passing holds the last run the operator reported, and is absent until the first run finishes. Passing is absent for a ping check, because the operator does not see its pings, and until the first probe runs."
                   x-kubernetes-list-type: map
                   x-kubernetes-list-map-keys: [type]
                   items:

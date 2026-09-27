@@ -20,8 +20,11 @@ type collectionWatch struct {
 	client    *kubeClient
 	resource  kubeResource
 	namespace string
-	store     *objectStore
-	wake      chan<- struct{}
+	// selector limits the watch to the objects whose labels match it.
+	// Empty watches every object in the collection.
+	selector string
+	store    *objectStore
+	wake     chan<- struct{}
 	// restarted runs each time the watch opens a stream after the first,
 	// so a metric counts the restarts.
 	restarted func()
@@ -35,11 +38,12 @@ type collectionWatch struct {
 
 // trim decodes an object of the collection into the operator's type
 // for it, and encodes that again. trimTo gives one for each type.
-func newCollectionWatch(client *kubeClient, resource kubeResource, namespace string, trim func(json.RawMessage) (json.RawMessage, error), wake chan<- struct{}, restarted func()) *collectionWatch {
+func newCollectionWatch(client *kubeClient, resource kubeResource, namespace, selector string, trim func(json.RawMessage) (json.RawMessage, error), wake chan<- struct{}, restarted func()) *collectionWatch {
 	return &collectionWatch{
 		client:    client,
 		resource:  resource,
 		namespace: namespace,
+		selector:  selector,
 		store: newObjectStore(trim, func(key, reason string) {
 			fmt.Fprintf(os.Stderr, "watching %s: skipping %s: %s\n", resource, key, reason)
 		}),
@@ -103,7 +107,7 @@ func (w *collectionWatch) run(ctx context.Context, resourceVersion string) {
 // server refused the watch, or an empty string. A 410 Gone is not a
 // refusal: the list that follows gives a current resourceVersion.
 func (w *collectionWatch) stream(ctx context.Context, resourceVersion *string) string {
-	resp, err := w.client.watch(ctx, w.resource, w.namespace, *resourceVersion)
+	resp, err := w.client.watch(ctx, w.resource, w.namespace, w.selector, *resourceVersion)
 	if err != nil {
 		return err.Error()
 	}
@@ -129,7 +133,7 @@ func (w *collectionWatch) list(ctx context.Context) (string, error) {
 		} `json:"metadata"`
 		Items []json.RawMessage `json:"items"`
 	}
-	if err := w.client.list(ctx, w.resource, w.namespace, &list); err != nil {
+	if err := w.client.list(ctx, w.resource, w.namespace, w.selector, &list); err != nil {
 		return "", err
 	}
 	w.store.replace(list.Items)

@@ -1,0 +1,18 @@
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata:
+  name: database-backup
+  namespace: example
+spec:
+  projectRef:
+    kind: ClusterProject
+    name: internal
+  description: Nightly database backup, pinged by the backup itself
+  tags: [backup]
+  grace: 1h
+  ping:
+    configMap:
+      name: database-backup-healthcheck
+      key: HEALTHCHECK_URL
+    schedule: "0 3 * * *"
+    timeZone: America/New_York

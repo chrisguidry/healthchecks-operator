@@ -2,8 +2,9 @@ package main
 
 // The operator's loop is level-triggered. A watch event or the backstop
 // ticker wakes it, and each pass reads every ClusterProject, Check,
-// CronJob, and Job from the watches' stores, then reconciles each
-// object against what the operator holds in memory. A pass sends no
+// CronJob, Job, and ConfigMap the operator wrote from the watches'
+// stores, then reconciles each object against what the operator holds
+// in memory. A pass sends no
 // request to the API server to read, so a tick costs nothing when
 // nothing is due. A restarted operator lists everything again, and
 // starts correct.
@@ -37,7 +38,14 @@ var (
 )
 
 // watchedCollections is the order in which run lists the resources.
-var watchedCollections = []kubeResource{clusterProjectsResource, checksResource, cronJobsResource, jobsResource}
+var watchedCollections = []kubeResource{clusterProjectsResource, checksResource, cronJobsResource, jobsResource, configMapsResource}
+
+// selectors limits a watch to the objects the operator reads. The
+// ConfigMap watch holds only the ConfigMaps the operator labeled, so
+// the store does not keep every ConfigMap in the cluster.
+var selectors = map[kubeResource]string{
+	configMapsResource: managedBySelector,
+}
 
 // trims gives each watched resource the type its store holds, which is
 // the type the pass decodes it into.
@@ -46,6 +54,7 @@ var trims = map[kubeResource]func(json.RawMessage) (json.RawMessage, error){
 	checksResource:          trimTo[Check],
 	cronJobsResource:        trimTo[batchCronJob],
 	jobsResource:            trimTo[batchJob],
+	configMapsResource:      trimTo[configMap],
 }
 
 // backstopInterval is how often the loop runs a pass with nothing to
@@ -102,7 +111,7 @@ func newController(config settings, client *kubeClient, readings *metrics, now f
 		watches:   map[kubeResource]*collectionWatch{},
 	}
 	for _, resource := range watchedCollections {
-		c.watches[resource] = newCollectionWatch(client, resource, "", trims[resource], c.wake, readings.watchRestarted(resource.Resource))
+		c.watches[resource] = newCollectionWatch(client, resource, "", selectors[resource], trims[resource], c.wake, readings.watchRestarted(resource.Resource))
 	}
 	c.schedule = newProbeSchedule(now, c.report)
 	if config.heartbeatProject != "" {
@@ -171,9 +180,11 @@ func (c *controller) watch(ctx context.Context, running *sync.WaitGroup, version
 type world struct {
 	projects []ClusterProject
 	checks   []Check
-	// cronJobs is keyed by namespace/name, and jobs by namespace.
-	cronJobs map[string]batchCronJob
-	jobs     map[string][]batchJob
+	// cronJobs and configMaps are keyed by namespace/name, and jobs by
+	// namespace.
+	cronJobs   map[string]batchCronJob
+	jobs       map[string][]batchJob
+	configMaps map[string]configMap
 }
 
 // read decodes the world from the stores. It sends no request to the
@@ -181,7 +192,7 @@ type world struct {
 // a list that does not decode would, so no pass acts on part of the
 // cluster.
 func (c *controller) read() (*world, error) {
-	w := &world{cronJobs: map[string]batchCronJob{}, jobs: map[string][]batchJob{}}
+	w := &world{cronJobs: map[string]batchCronJob{}, jobs: map[string][]batchJob{}, configMaps: map[string]configMap{}}
 	var err error
 	if w.projects, err = decodeSnapshot[ClusterProject](c.watches[clusterProjectsResource].store); err != nil {
 		return nil, fmt.Errorf("decoding %s: %w", clusterProjectsResource, err)
@@ -196,6 +207,13 @@ func (c *controller) read() (*world, error) {
 	jobs, err := decodeSnapshot[batchJob](c.watches[jobsResource].store)
 	if err != nil {
 		return nil, fmt.Errorf("decoding %s: %w", jobsResource, err)
+	}
+	configMaps, err := decodeSnapshot[configMap](c.watches[configMapsResource].store)
+	if err != nil {
+		return nil, fmt.Errorf("decoding %s: %w", configMapsResource, err)
+	}
+	for _, held := range configMaps {
+		w.configMaps[objectKey(held.Metadata.ObjectMeta)] = held
 	}
 	for _, cronJob := range cronJobs {
 		w.cronJobs[objectKey(cronJob.Metadata)] = cronJob

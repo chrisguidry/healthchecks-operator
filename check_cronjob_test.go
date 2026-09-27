@@ -226,3 +226,31 @@ func TestACronJobCheckKeepsPassingBetweenRuns(t *testing.T) {
 	mustMatch(t, conditionOf(check, "Passing").Status, ConditionFalse)
 	mustMatch(t, conditionOf(check, "Passing").Message, "backup-1: BackoffLimitExceeded")
 }
+
+// A cronJob Check whose last reported run finished before Passing
+// existed takes Passing from that Job, and sends no ping for it again.
+func TestACronJobCheckBackfillsPassingFromItsLastReportedJob(t *testing.T) {
+	h := startHarness(t)
+	h.api.create(cronJobsResource, backupCronJob())
+	h.api.create(checksResource, backupCheck())
+	h.startRun("backup-1")
+	h.finishRun("backup-1", "Complete")
+	h.pass()
+	uuid := h.check("example", "database-backup").Status.UUID
+	h.api.update(checksResource, "example", "database-backup", func(object map[string]any) {
+		status := object["status"].(map[string]any)
+		var kept []any
+		for _, condition := range status["conditions"].([]any) {
+			if condition.(map[string]any)["type"] != "Passing" {
+				kept = append(kept, condition)
+			}
+		}
+		status["conditions"] = kept
+	})
+	h.c = h.restart(settings{namespace: operatorNamespace})
+
+	h.pass()
+
+	mustMatch(t, conditionOf(h.check("example", "database-backup"), "Passing").Message, "backup-1 completed")
+	mustMatch(t, h.pingKinds(uuid), "success")
+}

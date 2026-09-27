@@ -232,19 +232,29 @@ func (c *kubeClient) get(ctx context.Context, resource kubeResource, namespace, 
 
 // list reads a collection into out, which is a list type with
 // metadata.resourceVersion and items. An empty namespace lists every
-// namespace. The list's resourceVersion is where a watch resumes.
-func (c *kubeClient) list(ctx context.Context, resource kubeResource, namespace string, out any) error {
-	return c.request(ctx, http.MethodGet, resource.path(namespace, ""), "", nil, out)
+// namespace. A selector, such as "team=a", lists only the objects whose
+// labels match it, and an empty one lists them all. The list's
+// resourceVersion is where a watch resumes.
+func (c *kubeClient) list(ctx context.Context, resource kubeResource, namespace, selector string, out any) error {
+	path := resource.path(namespace, "")
+	if selector != "" {
+		path += "?" + url.Values{"labelSelector": {selector}}.Encode()
+	}
+	return c.request(ctx, http.MethodGet, path, "", nil, out)
 }
 
 // watch opens a stream of changes to a collection, starting after
-// resourceVersion. The caller owns the response body. Bookmarks keep
-// the resume point current while nothing changes.
-func (c *kubeClient) watch(ctx context.Context, resource kubeResource, namespace, resourceVersion string) (*http.Response, error) {
+// resourceVersion, for the objects that selector matches. The caller
+// owns the response body. Bookmarks keep the resume point current
+// while nothing changes.
+func (c *kubeClient) watch(ctx context.Context, resource kubeResource, namespace, selector, resourceVersion string) (*http.Response, error) {
 	query := url.Values{
 		"watch":               {"true"},
 		"allowWatchBookmarks": {"true"},
 		"resourceVersion":     {resourceVersion},
+	}
+	if selector != "" {
+		query.Set("labelSelector", selector)
 	}
 	return c.send(ctx, http.MethodGet, resource.path(namespace, "")+"?"+query.Encode(), "", nil)
 }
@@ -269,6 +279,44 @@ func (c *kubeClient) setFinalizers(ctx context.Context, resource kubeResource, n
 		return err
 	}
 	return c.request(ctx, http.MethodPatch, resource.path(namespace, name), mergePatchContentType, body, out)
+}
+
+// apply writes an object with server-side apply, and creates it when
+// it does not exist. object states every field this operator owns,
+// and its apiVersion, kind, name, and namespace. The API server
+// removes a field this manager applied before and no longer states.
+// force takes a field from another manager, so an object that another
+// tool created becomes this operator's. out receives the written
+// object, and may be nil.
+func (c *kubeClient) apply(ctx context.Context, resource kubeResource, namespace, name string, object, out any) error {
+	body, err := json.Marshal(object)
+	if err != nil {
+		return err
+	}
+	query := url.Values{"fieldManager": {fieldManager}, "force": {"true"}}
+	path := resource.path(namespace, name) + "?" + query.Encode()
+	return c.request(ctx, http.MethodPatch, path, applyContentType, body, out)
+}
+
+// delete deletes one object, on the condition that its uid is uid. An
+// object made again under the same name has another uid, and the API
+// server refuses the delete with errConflict, so the caller deletes
+// only the object it read. An object that is already gone is
+// errNotFound, which the caller can take as done.
+func (c *kubeClient) delete(ctx context.Context, resource kubeResource, namespace, name, uid, resourceVersion string) error {
+	type preconditions struct {
+		UID             string `json:"uid"`
+		ResourceVersion string `json:"resourceVersion,omitempty"`
+	}
+	body, err := json.Marshal(struct {
+		APIVersion    string        `json:"apiVersion"`
+		Kind          string        `json:"kind"`
+		Preconditions preconditions `json:"preconditions"`
+	}{"v1", "DeleteOptions", preconditions{uid, resourceVersion}})
+	if err != nil {
+		return err
+	}
+	return c.request(ctx, http.MethodDelete, resource.path(namespace, name), jsonContentType, body, nil)
 }
 
 // statusApply is the partial object an apply sends: the identity the

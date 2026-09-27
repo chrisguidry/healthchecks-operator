@@ -1,13 +1,14 @@
 package main
 
-// The writes that fakeKube accepts: a merge patch on an object, and
-// server-side apply on its status.
+// The writes that fakeKube accepts: a merge patch on an object,
+// server-side apply on an object or on its status, and delete.
 
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 )
 
 func (f *fakeKube) servePatch(w http.ResponseWriter, r *http.Request, key fakeKey, status bool, body []byte) {
@@ -18,12 +19,16 @@ func (f *fakeKube) servePatch(w http.ResponseWriter, r *http.Request, key fakeKe
 	}
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
+	contentType := r.Header.Get("Content-Type")
 	before, exists := f.objects[key]
+	if !exists && contentType == applyContentType && !status {
+		writeKubeJSON(w, f.applyNew(key, patch, r.URL.Query().Get("fieldManager")))
+		return
+	}
 	if !exists {
 		writeKubeStatus(w, http.StatusNotFound, key.name+" not found")
 		return
 	}
-	contentType := r.Header.Get("Content-Type")
 	var answer int
 	var message string
 	var after map[string]any
@@ -32,6 +37,8 @@ func (f *fakeKube) servePatch(w http.ResponseWriter, r *http.Request, key fakeKe
 		after, answer, message = mergeObjectPatch(before, patch)
 	case contentType == applyContentType && status:
 		after, answer, message = f.applyStatus(key, before, patch, r.URL.Query().Get("fieldManager"))
+	case contentType == applyContentType:
+		after, answer, message = f.applyObject(key, before, patch, r.URL.Query().Get("fieldManager"))
 	default:
 		answer, message = http.StatusUnsupportedMediaType, "the fake API server does not support "+contentType+" here"
 	}
@@ -141,4 +148,78 @@ func deletePath(object map[string]any, path []string) {
 		}
 	}
 	delete(object, path[0])
+}
+
+// applyNew creates an object from an apply, as the API server does for
+// an apply to a name that does not exist. The caller holds the mutex.
+func (f *fakeKube) applyNew(key fakeKey, applied map[string]any, manager string) map[string]any {
+	f.applied[key] = map[string][][]string{manager: leafPaths(nil, applied)}
+	meta := metadataOf(applied)
+	f.version++
+	meta["uid"] = fmt.Sprintf("uid-%d", f.version)
+	meta["generation"] = 1
+	meta["creationTimestamp"] = f.now().UTC().Format(time.RFC3339)
+	f.record(key, "ADDED", applied, nil)
+	return f.objects[key]
+}
+
+// applyObject merges an applied object into the stored one, and removes
+// the fields that the same field manager applied before and does not
+// state now. A field another writer set stays, and the applied value
+// wins over it, as force gives it. A list is one field, as an atomic
+// list is.
+func (f *fakeKube) applyObject(key fakeKey, before, applied map[string]any, manager string) (map[string]any, int, string) {
+	if manager == "" {
+		return nil, http.StatusBadRequest, "fieldManager is required for apply"
+	}
+	after := clone(before)
+	fields := leafPaths(nil, applied)
+	for _, path := range f.applied[key][manager] {
+		if !slices.ContainsFunc(fields, func(field []string) bool { return slices.Equal(field, path) }) {
+			deletePath(after, path)
+		}
+	}
+	mergeInto(after, applied)
+	if f.applied[key] == nil {
+		f.applied[key] = map[string][][]string{}
+	}
+	f.applied[key][manager] = fields
+	return after, http.StatusOK, ""
+}
+
+// serveDelete deletes an object. One with finalizers gets a
+// deletionTimestamp and stays until the last finalizer is gone. A uid
+// or resourceVersion in the body's preconditions that is not the
+// object's gets 409, as the API server answers a delete of an object
+// made again under the same name, or changed since it was read.
+func (f *fakeKube) serveDelete(w http.ResponseWriter, key fakeKey, body []byte) {
+	var options struct {
+		Preconditions struct {
+			UID             string `json:"uid"`
+			ResourceVersion string `json:"resourceVersion"`
+		} `json:"preconditions"`
+	}
+	_ = json.Unmarshal(body, &options)
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	before, exists := f.objects[key]
+	if !exists {
+		writeKubeStatus(w, http.StatusNotFound, key.name+" not found")
+		return
+	}
+	if uid := options.Preconditions.UID; uid != "" && uid != metadataOf(before)["uid"] {
+		writeKubeStatus(w, http.StatusConflict, "Precondition failed: UID in precondition: "+uid)
+		return
+	}
+	if version := options.Preconditions.ResourceVersion; version != "" && version != metadataOf(before)["resourceVersion"] {
+		writeKubeStatus(w, http.StatusConflict, "Precondition failed: ResourceVersion in precondition: "+version)
+		return
+	}
+	after := clone(before)
+	meta := metadataOf(after)
+	if _, deleting := meta["deletionTimestamp"]; !deleting {
+		meta["deletionTimestamp"] = f.now().UTC().Format(time.RFC3339)
+	}
+	f.commit(key, before, after)
+	writeKubeStatus(w, http.StatusOK, key.name+" deleted")
 }

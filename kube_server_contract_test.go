@@ -54,7 +54,7 @@ func TestFakeKubeListsOneNamespaceOrAll(t *testing.T) {
 			api.create(widgets, newWidget("shop", "bolt"))
 
 			var list widgetList
-			mustSucceed(t, api.client.list(t.Context(), widgets, one.namespace, &list))
+			mustSucceed(t, api.client.list(t.Context(), widgets, one.namespace, "", &list))
 
 			mustMatch(t, list.Metadata.ResourceVersion, "3")
 			mustMatch(t, widgetNames(list.Items), one.names)
@@ -118,7 +118,7 @@ func openWidgetWatch(t *testing.T, api *fakeKube, namespace, resourceVersion str
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	t.Cleanup(cancel)
-	resp, err := api.client.watch(ctx, widgets, namespace, resourceVersion)
+	resp, err := api.client.watch(ctx, widgets, namespace, "", resourceVersion)
 	mustSucceed(t, err)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	mustMatch(t, resp.StatusCode, http.StatusOK)
@@ -171,7 +171,7 @@ func TestFakeKubeWatchFromACompactedVersionIsGone(t *testing.T) {
 	api.create(widgets, newWidget("shop", "gear"))
 	api.create(widgets, newWidget("shop", "bolt"))
 	api.compact()
-	resp, err := api.client.watch(t.Context(), widgets, "", "1")
+	resp, err := api.client.watch(t.Context(), widgets, "", "", "1")
 	mustSucceed(t, err)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 

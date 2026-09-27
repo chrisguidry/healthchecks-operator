@@ -273,7 +273,8 @@ func TestAConflictWaitsForTheNewerCheck(t *testing.T) {
 }
 
 // status.probe names the probe kind, because a printer column is a
-// JSONPath and cannot tell which of http, tls, and cronJob is set.
+// JSONPath and cannot tell which of http, tls, cronJob, and ping is
+// set.
 func TestAPassRecordsWhichProbeACheckRuns(t *testing.T) {
 	tlsCheck := httpCheck("example", "website", "")
 	tlsCheck.Spec.HTTP = nil
@@ -285,6 +286,7 @@ func TestAPassRecordsWhichProbeACheckRuns(t *testing.T) {
 		{httpCheck("example", "website", "https://example.com/"), "http"},
 		{tlsCheck, "tls"},
 		{backupCheck(), "cronJob"},
+		{pingCheck(PingProbe{Timeout: "24h"}), "ping"},
 	}
 	for _, one := range cases {
 		t.Run(one.want, func(t *testing.T) {

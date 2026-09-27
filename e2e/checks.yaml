@@ -96,3 +96,32 @@ metadata: {name: flaky, namespace: example}
 spec:
   projectRef: {kind: ClusterProject, name: e2e}
   cronJob: {name: flaky}
+---
+# A ConfigMap made the way Terraform makes one: no label and no owner.
+# The ping Check below takes it over and replaces the stale URL.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: nightly-export-healthcheck, namespace: example}
+data: {HEALTHCHECK_URL: "http://example.com/stale"}
+---
+# The workload pings this check itself. run.sh starts a Job that reads
+# the ping URL from the ConfigMap above and pings it.
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata: {name: nightly-export, namespace: example}
+spec:
+  projectRef: {kind: ClusterProject, name: e2e}
+  ping:
+    configMap: {name: nightly-export-healthcheck}
+    timeout: 1h
+---
+# No ConfigMap exists before this Check. The operator creates it with
+# server-side apply, which the API server authorizes as a create.
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata: {name: weekly-report, namespace: example}
+spec:
+  projectRef: {kind: ClusterProject, name: e2e}
+  ping:
+    configMap: {name: weekly-report-healthcheck}
+    schedule: "0 4 * * 1"

@@ -76,7 +76,7 @@ type widgetWatch struct {
 
 func newWidgetWatch(client *kubeClient) *widgetWatch {
 	w := &widgetWatch{wake: make(chan struct{}, 1)}
-	w.collectionWatch = newCollectionWatch(client, widgets, "", trimTo[widget], w.wake, func() { w.restarts.Add(1) })
+	w.collectionWatch = newCollectionWatch(client, widgets, "", "", trimTo[widget], w.wake, func() { w.restarts.Add(1) })
 	w.pause = time.Millisecond
 	w.backoff = 4 * time.Millisecond
 	return w
@@ -122,7 +122,7 @@ func startWidgetWatch(t *testing.T, client *kubeClient, resourceVersion string) 
 func waitForStore(t *testing.T, api *fakeKube, store *objectStore) {
 	t.Helper()
 	eventually(t, "the store to hold the widgets", func() bool {
-		return maps.Equal(storedVersions(t, store), api.versions(widgets))
+		return maps.Equal(storedVersions(t, store), api.versions(widgets, ""))
 	})
 }
 
