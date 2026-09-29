@@ -118,6 +118,49 @@ func TestFailedCronJobPingsWaitForTheBackoff(t *testing.T) {
 	mustMatch(t, h.log.lines()[3], "check example/database-backup: ping recovered")
 }
 
+// refusePingsAfter lets the first allowed pings through and refuses
+// every ping after them.
+type refusePingsAfter struct {
+	allowed *atomic.Int32
+}
+
+func (r refusePingsAfter) RoundTrip(request *http.Request) (*http.Response, error) {
+	if strings.HasPrefix(request.URL.Path, "/ping/") && r.allowed.Add(-1) < 0 {
+		return nil, errors.New("connection refused")
+	}
+	return http.DefaultTransport.RoundTrip(request)
+}
+
+// A ping that fails partway through a pass keeps the place of the last
+// run reported before it, so the pass after the backoff sends no run's
+// finish ping a second time.
+func TestAFailedPingKeepsThePlaceOfTheRunsReportedBeforeIt(t *testing.T) {
+	h := startHarness(t)
+	h.api.now = h.clock.now
+	allowed := &atomic.Int32{}
+	allowed.Store(1)
+	h.c.http = &http.Client{Transport: refusePingsAfter{allowed}}
+	h.api.create(cronJobsResource, backupCronJob())
+	h.api.create(checksResource, backupCheck())
+	h.startRun("backup-1")
+	h.finishRun("backup-1", "Complete")
+	h.pass()
+	uuid := h.check("example", "database-backup").Status.UUID
+	h.clock.advance(time.Minute)
+	h.startRun("backup-2")
+	h.finishRun("backup-2", "Complete")
+	h.clock.advance(time.Minute)
+	h.startRun("backup-3")
+	allowed.Store(2)
+	h.pass()
+
+	allowed.Store(100)
+	h.clock.advance(5 * time.Second)
+	h.pass()
+
+	mustMatch(t, h.pingKinds(uuid), "success, start, success, start")
+}
+
 // The local port changes on every connection, so the text leaves the
 // addresses out, and a failure that repeats writes the same message.
 func TestANetworkErrorLeavesOutTheAddresses(t *testing.T) {

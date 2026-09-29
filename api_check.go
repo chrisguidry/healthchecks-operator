@@ -294,6 +294,12 @@ type CheckStatus struct {
 	UUID            string `json:"uuid,omitempty"`
 	PingURL         string `json:"pingURL,omitempty"`
 	LastReportedJob string `json:"lastReportedJob,omitempty"`
+	// LastReportedJobCreated is LastReportedJob's creationTimestamp, and
+	// LastReportedJobOwner is the uid of the CronJob that owns it. They
+	// place that Job among the CronJob's Jobs after the Job is gone, so
+	// the operator reports no Job made before it a second time.
+	LastReportedJobCreated string `json:"lastReportedJobCreated,omitempty"`
+	LastReportedJobOwner   string `json:"lastReportedJobOwner,omitempty"`
 	// ConfigMap is the name of the ConfigMap the operator wrote the ping
 	// URL into, for a ping check. When spec.ping.configMap names another
 	// one, or none, the operator deletes the ConfigMap named here.

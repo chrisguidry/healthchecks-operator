@@ -317,6 +317,13 @@ spec:
                 lastReportedJob:
                   type: string
                   description: "The name of the last Job the operator pinged for, for a cronJob check. Empty until the operator reports a run."
+                lastReportedJobCreated:
+                  type: string
+                  format: date-time
+                  description: "The creationTimestamp of lastReportedJob. After that Job is deleted, the operator reports only the Jobs that sort after it, by creation time and then by name."
+                lastReportedJobOwner:
+                  type: string
+                  description: "The uid of the CronJob that owns lastReportedJob. The operator uses lastReportedJobCreated only for Jobs of this CronJob."
                 configMap:
                   type: string
                   description: "The name of the ConfigMap the operator wrote the ping URL into, for a ping check. When spec.ping.configMap names another ConfigMap, or none, the operator deletes this one."

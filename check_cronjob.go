@@ -33,12 +33,30 @@ func (c *controller) reportRuns(ctx context.Context, state *checkState, cronJob 
 		if ping.kind == healthchecks.PingStart {
 			state.runs.lastStartedJob = ping.job
 		} else {
-			state.runs.lastReportedJob = ping.job
+			state.runs.lastReportedJob, state.runs.lastReportedCreated, state.runs.lastReportedOwner = ping.job, ping.created, cronJob.Metadata.UID
 			finished = &ping
 		}
 	}
 	state.runs = after
 	return finished
+}
+
+// runsFromStatus is where the reporting stood when the operator last
+// wrote status. A creation time that does not parse leaves only the
+// name, which places reporting the way a status from before the field
+// existed does.
+func runsFromStatus(status CheckStatus) cronJobRuns {
+	created, _ := time.Parse(time.RFC3339, status.LastReportedJobCreated)
+	return cronJobRuns{lastReportedJob: status.LastReportedJob, lastReportedCreated: created, lastReportedOwner: status.LastReportedJobOwner}
+}
+
+// createdTimestamp is lastReportedCreated as status holds it, or "" when
+// the operator has not reported a run.
+func (r cronJobRuns) createdTimestamp() string {
+	if r.lastReportedCreated.IsZero() {
+		return ""
+	}
+	return timestamp(r.lastReportedCreated)
 }
 
 // The reasons a cronJob Check's Passing condition gives. They differ
@@ -86,9 +104,9 @@ func pingLabel(kind healthchecks.PingKind) string {
 }
 
 // lastReported is the outcome of the Job the operator last reported,
-// for a Check with no Passing yet: one whose last run was reported
-// before Passing followed runs. It is nil when that Job is gone or has
-// not finished. It sends nothing; the run was reported already.
+// for a cronJob Check whose status names that Job and has no Passing
+// condition. It is nil when that Job is gone or has not finished. It
+// sends nothing; the run was reported already.
 func lastReported(jobs []batchJob, name string) *jobPing {
 	for _, job := range jobs {
 		if job.Metadata.Name != name {
@@ -98,7 +116,7 @@ func lastReported(jobs []batchJob, name string) *jobPing {
 		if !finished {
 			return nil
 		}
-		return &jobPing{job: name, kind: kind, body: body}
+		return &jobPing{job: name, created: job.Metadata.CreationTimestamp, kind: kind, body: body}
 	}
 	return nil
 }

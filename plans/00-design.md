@@ -289,6 +289,9 @@ the same as the current one.
   `ping`, so `kubectl get checks` can show it in a column.
 - `lastReportedJob`: the name of the last Job the operator pinged for, for
   a `cronJob` check.
+- `lastReportedJobCreated` and `lastReportedJobOwner`: the
+  `creationTimestamp` of `lastReportedJob`, and the uid of the CronJob
+  that owns it.
 - `configMap`: the name of the ConfigMap the operator wrote the ping URL
   into, for a `ping` check.
 - Conditions:
@@ -317,10 +320,15 @@ The same text is the message of the `Passing` condition.
 
 - On start, and after a watch drops, the operator lists every `Check` and
   every Job before it watches again.
-- For a `cronJob` check, the operator compares the CronJob's finished Jobs
-  with `lastReportedJob`. It pings once for each Job that finished after
-  that one, in order. A backup that finished while the operator restarted
-  still reports.
+- For a `cronJob` check, the operator orders the CronJob's Jobs by
+  creation time and then by name, and finds where `lastReportedJob` and
+  `lastReportedJobCreated` fall in that order. It pings once for each
+  finished Job after that place, in order. A backup that finished while
+  the operator restarted still reports. The place stays the same after
+  Kubernetes prunes `lastReportedJob` or a person deletes it, so a Job
+  made before it is never reported a second time. A place that another
+  CronJob owns does not count, and a Check that changes its CronJob
+  reports only that CronJob's newest finished Job.
 - An `http` or `tls` probe that was due while the operator was down runs as
   soon as the operator starts.
 

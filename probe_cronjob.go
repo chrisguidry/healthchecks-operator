@@ -179,20 +179,27 @@ func historyProblem(c batchCronJob) string {
 
 // jobPing is one ping the reconciler sends for one Job.
 type jobPing struct {
-	job  string
-	kind healthchecks.PingKind
+	job string
+	// created is the Job's creationTimestamp, which places the Job among
+	// the CronJob's other Jobs after the Job itself is gone.
+	created time.Time
+	kind    healthchecks.PingKind
 	// body is "" for a start or a success, and says which Job failed and
 	// why for a failure.
 	body string
 }
 
 // cronJobRuns is what the reconciler tracks for one cronJob Check
-// between passes. lastReportedJob is persisted in status. lastStartedJob
-// is held in memory only: after a restart, a running Job may get a
-// second /start, which Healthchecks treats as a new start time.
+// between passes. lastReportedJob, lastReportedCreated, and
+// lastReportedOwner, the uid of the CronJob that owns the Job, are
+// persisted in status. lastStartedJob is held in memory only: after a
+// restart, a running Job may get a second /start, which Healthchecks
+// treats as a new start time.
 type cronJobRuns struct {
-	lastStartedJob  string
-	lastReportedJob string
+	lastStartedJob      string
+	lastReportedJob     string
+	lastReportedCreated time.Time
+	lastReportedOwner   string
 }
 
 // ownedJobs returns c's own Jobs from jobs, ordered by creation time
@@ -206,13 +213,25 @@ func ownedJobs(c batchCronJob, jobs []batchJob) []batchJob {
 		}
 	}
 	sort.Slice(owned, func(i, k int) bool {
-		ti, tk := owned[i].Metadata.CreationTimestamp, owned[k].Metadata.CreationTimestamp
-		if !ti.Equal(tk) {
-			return ti.Before(tk)
-		}
-		return owned[i].Metadata.Name < owned[k].Metadata.Name
+		return jobBefore(owned[i].Metadata.CreationTimestamp, owned[i].Metadata.Name, owned[k].Metadata.CreationTimestamp, owned[k].Metadata.Name)
 	})
 	return owned
+}
+
+// jobBefore reports whether a Job made at created under name sorts
+// before a Job made at otherCreated under otherName, in the order that
+// ownedJobs returns.
+func jobBefore(created time.Time, name string, otherCreated time.Time, otherName string) bool {
+	if !created.Equal(otherCreated) {
+		return created.Before(otherCreated)
+	}
+	return name < otherName
+}
+
+// placedIn reports whether the runs hold a place among c's Jobs: the
+// creation time of the last reported Job, and c as that Job's owner.
+func (r cronJobRuns) placedIn(c batchCronJob) bool {
+	return !r.lastReportedCreated.IsZero() && r.lastReportedOwner == c.Metadata.UID
 }
 
 // indexOfJob returns name's position in owned, or -1 when name is ""
@@ -230,20 +249,41 @@ func indexOfJob(owned []batchJob, name string) int {
 	return -1
 }
 
-// reportPlan finds where to resume reporting finished Jobs.
+// reportPlan finds where to resume reporting finished Jobs: reportIndex
+// is the last Job in owned that was reported already.
 //
-// While lastReportedJob still names a Job in owned, reporting resumes
-// right after it: the ordinary steady-state case.
+// Every Job of the same CronJob that sorts at or before the last
+// reported Job's place was reported already, whether that Job is still
+// there or not. Kubernetes
+// prunes old Jobs past the CronJob's history limit, and a person can
+// delete any Job, the newest included. Only the place tells the older
+// Jobs from the newer ones once the reported Job is gone, and a Job
+// made again under the reported Job's name sorts after that place. A
+// place from another CronJob, which the Check named before, says
+// nothing about this CronJob's Jobs.
 //
-// Otherwise, lastReportedJob is "" for a Check the operator has never
-// reported for, or it names a Job that Kubernetes has since pruned past
-// the CronJob's history limit. Either way, cronJobRuns stores only a
-// name, never a timestamp, so there is nothing left to place the old
-// position by. The safe catch-up is the newest finished Job alone: that
-// is the one run whose outcome the Job list can still prove, and it
-// pairs with suppressing start pings for every already-finished Job, so
-// none of them is left with a start ping and no finish ping to match it.
-func reportPlan(owned []batchJob) (reportIndex int, suppressFinishedStarts bool) {
+// A status written before lastReportedCreated existed holds only a
+// name, and a new Check holds neither. While the name still names a Job
+// in owned, reporting resumes right after it. Otherwise there is
+// nothing to place the old position by, and the safe catch-up is the
+// newest finished Job alone: that is the one run whose outcome the Job
+// list can still prove. It pairs with suppressing start pings for every
+// already-finished Job, so none of them is left with a start ping and
+// no finish ping to match it.
+func reportPlan(c batchCronJob, owned []batchJob, runs cronJobRuns) (reportIndex int, suppressFinishedStarts bool) {
+	if runs.placedIn(c) {
+		reportIndex = -1
+		for i, j := range owned {
+			if jobBefore(runs.lastReportedCreated, runs.lastReportedJob, j.Metadata.CreationTimestamp, j.Metadata.Name) {
+				break
+			}
+			reportIndex = i
+		}
+		return reportIndex, false
+	}
+	if idx := indexOfJob(owned, runs.lastReportedJob); idx >= 0 {
+		return idx, false
+	}
 	newest := -1
 	for i, j := range owned {
 		if finished, _, _ := j.outcome(); finished {
@@ -262,14 +302,12 @@ func pendingPings(c batchCronJob, jobs []batchJob, runs cronJobRuns) ([]jobPing,
 	owned := ownedJobs(c, jobs)
 
 	startIndex := indexOfJob(owned, runs.lastStartedJob)
-	reportIndex, suppressFinishedStarts := -1, false
-	if idx := indexOfJob(owned, runs.lastReportedJob); runs.lastReportedJob != "" && idx >= 0 {
-		reportIndex = idx
-	} else {
-		reportIndex, suppressFinishedStarts = reportPlan(owned)
-	}
+	reportIndex, suppressFinishedStarts := reportPlan(c, owned, runs)
 
 	next := runs
+	if idx := indexOfJob(owned, runs.lastReportedJob); idx >= 0 && !runs.placedIn(c) {
+		next.lastReportedCreated, next.lastReportedOwner = owned[idx].Metadata.CreationTimestamp, c.Metadata.UID
+	}
 	var pings []jobPing
 
 	for i, j := range owned {
@@ -280,13 +318,13 @@ func pendingPings(c batchCronJob, jobs []batchJob, runs cronJobRuns) ([]jobPing,
 		// too, even if this pass's lastStartedJob (memory-only) forgets
 		// that because the operator restarted since.
 		if i > startIndex && i > reportIndex && j.Status.StartTime != nil && !(suppressFinishedStarts && finished) {
-			pings = append(pings, jobPing{job: j.Metadata.Name, kind: healthchecks.PingStart})
+			pings = append(pings, jobPing{job: j.Metadata.Name, created: j.Metadata.CreationTimestamp, kind: healthchecks.PingStart})
 			next.lastStartedJob = j.Metadata.Name
 		}
 
 		if i > reportIndex && finished {
-			pings = append(pings, jobPing{job: j.Metadata.Name, kind: kind, body: body})
-			next.lastReportedJob = j.Metadata.Name
+			pings = append(pings, jobPing{job: j.Metadata.Name, created: j.Metadata.CreationTimestamp, kind: kind, body: body})
+			next.lastReportedJob, next.lastReportedCreated, next.lastReportedOwner = j.Metadata.Name, j.Metadata.CreationTimestamp, c.Metadata.UID
 		}
 	}
 

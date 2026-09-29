@@ -90,7 +90,7 @@ func (c *controller) checkState(check *Check) *checkState {
 		namespace: check.Metadata.Namespace,
 		name:      check.Metadata.Name,
 		status:    check.Status,
-		runs:      cronJobRuns{lastReportedJob: check.Status.LastReportedJob},
+		runs:      runsFromStatus(check.Status),
 	}
 	if held != nil {
 		// The old object's prober stays registered under the same key,
@@ -170,9 +170,9 @@ func (c *controller) reconcileCheck(ctx context.Context, check *Check, w *world)
 		next.Conditions = withoutCondition(next.Conditions, passingCondition)
 	}
 	next.Probe = kind.String()
-	next.LastReportedJob = ""
+	next.LastReportedJob, next.LastReportedJobCreated, next.LastReportedJobOwner = "", "", ""
 	if kind == ProbeKindCronJob {
-		next.LastReportedJob = state.runs.lastReportedJob
+		next.LastReportedJob, next.LastReportedJobCreated, next.LastReportedJobOwner = state.runs.lastReportedJob, state.runs.createdTimestamp(), state.runs.lastReportedOwner
 	}
 	if v.remote() {
 		state.backoff.failed(c.now())

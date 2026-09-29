@@ -148,6 +148,21 @@ assert_triggered_failure() {
   body=$(hc_api "/api/v3/checks/$uuid/pings/$n/body")
   [[ "$body" == *"$job_name"* ]] || die "fail ping body for example-flaky does not name $job_name: $body"
   log "ok: a triggered failing Job produces a fail ping whose body names the Job"
+
+  retry "Check flaky's status places $job_name by its creation time" 30 reported_job_placed flaky "$job_name"
+  log "ok: status holds the reported Job's creationTimestamp, which places it after the Job is deleted"
+}
+
+# reported_job_placed requires the Check's status to name JOB as the
+# last reported Job, with JOB's creationTimestamp and the uid of the
+# CronJob that owns it beside it. The API server prunes a status field
+# that the CRD does not declare, so this proves the fields survive a
+# real apply.
+reported_job_placed() {
+  local check=$1 job=$2 reported want
+  reported=$(kubectl -n "$CHECK_NS" get check "$check" -o jsonpath='{.status.lastReportedJob} {.status.lastReportedJobCreated} {.status.lastReportedJobOwner}')
+  want=$(kubectl -n "$CHECK_NS" get job "$job" -o jsonpath='{.metadata.name} {.metadata.creationTimestamp} {.metadata.ownerReferences[0].uid}')
+  [ "$reported" = "$want" ] || { echo "Check $check status: [$reported], want [$want]"; return 1; }
 }
 
 # pings_show_start_then reads a check's two most recent pings and

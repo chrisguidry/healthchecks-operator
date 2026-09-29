@@ -167,6 +167,36 @@ func TestACronJobCheckCatchesUpAfterARestart(t *testing.T) {
 	mustMatch(t, h.check("example", "database-backup").Status.LastReportedJob, "backup-3")
 }
 
+// A manual run fixes a failed one, and then someone deletes the manual
+// run's Job. The failure was reported before the fix, so it is not sent
+// again, even by an operator that restarted and reads its place from
+// status. The next run is still reported.
+func TestACronJobCheckKeepsItsPlaceWhenItsLastReportedJobIsDeleted(t *testing.T) {
+	h := startHarness(t)
+	h.api.create(cronJobsResource, backupCronJob())
+	h.api.create(checksResource, backupCheck())
+	h.startRun("backup-1")
+	h.finishRun("backup-1", "Failed")
+	h.pass()
+	uuid := h.check("example", "database-backup").Status.UUID
+	h.startRun("backup-2")
+	h.finishRun("backup-2", "Complete")
+	h.pass()
+
+	h.api.delete(jobsResource, "example", "backup-2")
+	h.c = h.restart(settings{namespace: operatorNamespace})
+	h.pass()
+
+	mustMatch(t, h.pingKinds(uuid), "fail: backup-1: BackoffLimitExceeded, start, success")
+	mustMatch(t, conditionOf(h.check("example", "database-backup"), "Passing").Message, "backup-2 completed")
+
+	h.startRun("backup-3")
+	h.finishRun("backup-3", "Complete")
+	h.pass()
+
+	mustMatch(t, h.pingKinds(uuid), "fail: backup-1: BackoffLimitExceeded, start, success, start, success")
+}
+
 // A cronJob Check's Passing condition follows the last run the operator
 // reported, so kubectl shows a failed backup the way it shows a failed
 // probe.
