@@ -29,15 +29,10 @@ func newTLSProber(spec TLSProbe) (prober, error) {
 }
 
 // withTLSPort adds port 443 to a host that names no port, because 443 is
-// the port nearly every certificate worth watching is served on. A bare
-// IPv6 address has colons of its own, so it is recognized as an address
-// before the port is added.
+// the port nearly every certificate worth watching is served on.
 func withTLSPort(host string) (string, error) {
-	if _, _, err := net.SplitHostPort(host); err == nil {
-		return host, nil
-	}
-	if !strings.Contains(host, ":") || net.ParseIP(host) != nil {
-		return net.JoinHostPort(host, "443"), nil
+	if withPort, ok := withDefaultPort(host, "443"); ok {
+		return withPort, nil
 	}
 	return "", fmt.Errorf("tls.host %q is not host or host:port", host)
 }

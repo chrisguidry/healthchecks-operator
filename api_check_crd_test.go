@@ -51,6 +51,17 @@ func tcpSpec(connection map[string]any) map[string]any {
 	}
 }
 
+// dnsSpec is a dns check with the query given.
+func dnsSpec(query map[string]any) map[string]any {
+	return map[string]any{
+		"projectRef": projectRef(),
+		"dns": map[string]any{
+			"interval": "5m",
+			"queries":  []any{query},
+		},
+	}
+}
+
 func cronJobSpec() map[string]any {
 	return map[string]any{
 		"projectRef": projectRef(),
@@ -79,6 +90,12 @@ func TestCheckCRDValidatesExamples(t *testing.T) {
 		{name: "a tcp check that expects a banner from a closed port", object: check(tcpSpec(map[string]any{"address": "example.com:22", "expect": map[string]any{"closed": true, "bannerContains": "SSH-"}})), wantErr: true},
 		{name: "a tcp check with no port", object: check(tcpSpec(map[string]any{"address": "example.com"})), wantErr: true},
 		{name: "a tcp check with no connections", object: check(map[string]any{"projectRef": projectRef(), "tcp": map[string]any{"interval": "5m", "connections": []any{}}}), wantErr: true},
+		{name: "a dns check", object: check(dnsSpec(map[string]any{"server": "192.0.2.53", "lookup": "www.example.com"}))},
+		{name: "a dns check with a type and answers", object: check(dnsSpec(map[string]any{"server": "192.0.2.53:5353", "lookup": "example.com", "type": "NS", "expect": map[string]any{"answers": []any{"ns1.example.com"}}}))},
+		{name: "a dns check of a type it does not ask", object: check(dnsSpec(map[string]any{"server": "192.0.2.53", "lookup": "example.com", "type": "MX"})), wantErr: true},
+		{name: "a dns check with no server", object: check(dnsSpec(map[string]any{"lookup": "example.com"})), wantErr: true},
+		{name: "a dns check with an empty answer list", object: check(dnsSpec(map[string]any{"server": "192.0.2.53", "lookup": "example.com", "expect": map[string]any{"answers": []any{}}})), wantErr: true},
+		{name: "a dns interval under a minute", object: check(map[string]any{"projectRef": projectRef(), "dns": map[string]any{"interval": "30s", "queries": []any{map[string]any{"server": "192.0.2.53", "lookup": "example.com"}}}}), wantErr: true},
 		{name: "a tcp interval under a minute", object: check(map[string]any{"projectRef": projectRef(), "tcp": map[string]any{"interval": "30s", "connections": []any{map[string]any{"address": "example.com:22"}}}}), wantErr: true},
 		{name: "a ping check on a schedule", object: check(pingSpec(map[string]any{"schedule": "0 3 * * *"}))},
 		{name: "a ping check on a schedule in a time zone", object: check(pingSpec(map[string]any{"schedule": "0 3 * * *", "timeZone": "America/New_York"}))},

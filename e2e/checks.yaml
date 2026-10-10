@@ -68,6 +68,20 @@ spec:
         address: hc-e2e-healthchecks:8001
         expect: {closed: true}
 ---
+# Passes: the cluster's DNS server answers with an address for the
+# cluster's own API service.
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata: {name: cluster-dns, namespace: example}
+spec:
+  projectRef: {kind: ClusterProject, name: e2e}
+  dns:
+    interval: 1m
+    queries:
+      - name: the API service
+        server: kube-dns.kube-system.svc.cluster.local
+        lookup: kubernetes.default.svc.cluster.local
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata: {name: backup, namespace: example}

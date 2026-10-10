@@ -1,6 +1,6 @@
 package main
 
-// An http, tls, or tcp Check has a prober in the probe schedule, registered
+// An http, tls, tcp, or dns Check has a prober in the probe schedule, registered
 // under the Check's namespace/name. The schedule hands each result to
 // report, which pings the check and records the result in the Passing
 // condition.
@@ -34,6 +34,8 @@ func probeIdentity(spec CheckSpec) string {
 		block = spec.TLS
 	case ProbeKindTCP:
 		block = spec.TCP
+	case ProbeKindDNS:
+		block = spec.DNS
 	default:
 		return ""
 	}
@@ -82,6 +84,8 @@ func (c *controller) buildProber(spec CheckSpec, namespace string) (prober, erro
 		return newTLSProber(*spec.TLS)
 	case ProbeKindTCP:
 		return newTCPProber(*spec.TCP)
+	case ProbeKindDNS:
+		return newDNSProber(*spec.DNS)
 	default:
 		return nil, fmt.Errorf("a %s check has no prober", spec.ProbeKind())
 	}

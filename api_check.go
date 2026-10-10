@@ -127,6 +127,7 @@ type CheckSpec struct {
 	HTTP     *HTTPProbe    `json:"http,omitempty"`
 	TLS      *TLSProbe     `json:"tls,omitempty"`
 	TCP      *TCPProbe     `json:"tcp,omitempty"`
+	DNS      *DNSProbe     `json:"dns,omitempty"`
 	CronJob  *CronJobProbe `json:"cronJob,omitempty"`
 	Ping     *PingProbe    `json:"ping,omitempty"`
 }
@@ -139,6 +140,7 @@ const (
 	ProbeKindHTTP
 	ProbeKindTLS
 	ProbeKindTCP
+	ProbeKindDNS
 	ProbeKindCronJob
 	ProbeKindPing
 )
@@ -151,6 +153,8 @@ func (k ProbeKind) String() string {
 		return "tls"
 	case ProbeKindTCP:
 		return "tcp"
+	case ProbeKindDNS:
+		return "dns"
 	case ProbeKindCronJob:
 		return "cronJob"
 	case ProbeKindPing:
@@ -163,7 +167,7 @@ func (k ProbeKind) String() string {
 // timedProbeKinds are the kinds that run a prober on the timer. A
 // cronJob check reports Jobs that already ran, and a ping check is
 // pinged by its workload, so neither has a prober.
-var timedProbeKinds = []ProbeKind{ProbeKindHTTP, ProbeKindTLS, ProbeKindTCP}
+var timedProbeKinds = []ProbeKind{ProbeKindHTTP, ProbeKindTLS, ProbeKindTCP, ProbeKindDNS}
 
 // timed reports whether the kind runs a prober on the timer.
 func (k ProbeKind) timed() bool {
@@ -180,6 +184,8 @@ func (s CheckSpec) ProbeKind() ProbeKind {
 		return ProbeKindTLS
 	case s.TCP != nil:
 		return ProbeKindTCP
+	case s.DNS != nil:
+		return ProbeKindDNS
 	case s.CronJob != nil:
 		return ProbeKindCronJob
 	case s.Ping != nil:
@@ -286,6 +292,44 @@ type TCPExpectation struct {
 	// Closed turns the expectation around: the port must refuse the
 	// connection or not answer, for a port that must stay shut.
 	Closed bool `json:"closed,omitempty"`
+}
+
+// DNSProbe asks every question in Queries, in order, on every Interval.
+// The check pings success only if every answer meets its expectations,
+// and a failure names every query that missed one.
+type DNSProbe struct {
+	// Interval is a Go duration string, at least 1m, and the check's
+	// timeout on Healthchecks.
+	Interval string     `json:"interval"`
+	Queries  []DNSQuery `json:"queries"`
+}
+
+// DNSQuery is one question the probe asks one server, and what it
+// expects back. The probe asks the question exactly as written, with
+// no search domains and no hosts file, so it sees what the server
+// answers and nothing else.
+type DNSQuery struct {
+	// Name labels the query in a failure reason in place of its lookup,
+	// type, and server.
+	Name string `json:"name,omitempty"`
+	// Server is host or host:port, and the port is 53 when it is absent.
+	Server string `json:"server"`
+	// Lookup is the domain name to ask about. For a PTR query it may be
+	// an address, which the probe turns into its reverse name.
+	Lookup string `json:"lookup"`
+	// Type is the record type: A, AAAA, CNAME, NS, PTR, or TXT. Absent
+	// means A.
+	Type   string         `json:"type,omitempty"`
+	Expect DNSExpectation `json:"expect,omitempty"`
+}
+
+// DNSExpectation is what a passing answer looks like. With no field
+// set, the answer must hold at least one record of the type.
+type DNSExpectation struct {
+	// Answers is the exact set of records the answer must hold, in any
+	// order: addresses for A and AAAA, names for CNAME, NS, and PTR, and
+	// the joined text for TXT.
+	Answers []string `json:"answers,omitempty"`
 }
 
 // CronJobProbe reports each run of the named CronJob in the Check's own

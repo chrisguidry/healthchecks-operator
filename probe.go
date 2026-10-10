@@ -1,13 +1,15 @@
 package main
 
-// A probe checks one thing, an HTTP endpoint or a TLS certificate, and
-// returns pass or fail with a reason. It never calls Healthchecks: the
-// check_*.go files send the pings. probe_http.go and probe_tls.go build
-// the probers, and probe_schedule.go runs them on their intervals.
+// A probe checks one thing, such as an HTTP endpoint, a TLS certificate,
+// a TCP port, or a DNS answer, and returns pass or fail with a reason.
+// It never calls Healthchecks: the check_*.go files send the pings. The
+// probe_<kind>.go files build the probers, and probe_schedule.go runs
+// them on their intervals.
 
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -43,4 +45,18 @@ type prober interface {
 // in kube_secret.go.
 type secretReader interface {
 	secretValue(ctx context.Context, namespace, name, key string) (string, error)
+}
+
+// withDefaultPort adds port to a host that names no port. A bare IPv6
+// address has colons of its own, so it is recognized as an address
+// before the port is added. ok is false for a host that is neither
+// host nor host:port.
+func withDefaultPort(host, port string) (string, bool) {
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host, true
+	}
+	if !strings.Contains(host, ":") || net.ParseIP(host) != nil {
+		return net.JoinHostPort(host, port), true
+	}
+	return "", false
 }

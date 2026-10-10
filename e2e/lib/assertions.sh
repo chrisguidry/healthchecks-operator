@@ -3,7 +3,7 @@
 # numbered claim from the e2e plan; the check_* functions under it are
 # what retry (e2e/lib/common.sh) polls until it holds or times out.
 
-READY_CHECKS=(healthchecks-ui broken-page kubernetes-api-cert healthchecks-port backup flaky nightly-export weekly-report)
+READY_CHECKS=(healthchecks-ui broken-page kubernetes-api-cert healthchecks-port cluster-dns backup flaky nightly-export weekly-report)
 
 assert_clusterproject_ready() {
   retry "ClusterProject e2e Ready=True" 60 clusterproject_ready
@@ -37,7 +37,8 @@ assert_passing_states() {
   retry "Check kubernetes-api-cert Passing=False, certificate does not verify" 60 \
     check_passing kubernetes-api-cert False
   retry "Check healthchecks-port Passing=True" 90 check_passing healthchecks-port True
-  log "ok: healthchecks-ui and healthchecks-port pass, broken-page and kubernetes-api-cert fail as expected"
+  retry "Check cluster-dns Passing=True" 90 check_passing cluster-dns True
+  log "ok: healthchecks-ui, healthchecks-port, and cluster-dns pass, broken-page and kubernetes-api-cert fail as expected"
 }
 
 # check_passing reads a Check's Passing condition, and when CONTAINS is
@@ -67,12 +68,13 @@ declare -A EXPECT_SLUG=(
   [broken-page]=example-broken-page
   [kubernetes-api-cert]=example-kubernetes-api-cert
   [healthchecks-port]=example-healthchecks-port
+  [cluster-dns]=example-cluster-dns
   [backup]=example-backup
   [flaky]=example-flaky
   [nightly-export]=example-nightly-export
   [weekly-report]=example-weekly-report
 )
-declare -A EXPECT_TIMEOUT=([healthchecks-ui]=60 [broken-page]=60 [kubernetes-api-cert]=60 [healthchecks-port]=60 [nightly-export]=3600)
+declare -A EXPECT_TIMEOUT=([healthchecks-ui]=60 [broken-page]=60 [kubernetes-api-cert]=60 [healthchecks-port]=60 [cluster-dns]=60 [nightly-export]=3600)
 declare -A EXPECT_SCHEDULE=([backup]="* * * * *" [flaky]="0 * * * *" [weekly-report]="0 4 * * 1")
 declare -A EXPECT_TAGS=([healthchecks-ui]="e2e http")
 

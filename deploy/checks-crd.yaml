@@ -51,7 +51,7 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
-          description: "One Healthchecks check and the probe that feeds it. The operator creates and updates the check in Healthchecks, runs the probe, and sends the ping. A Check names exactly one probe: http, tls, tcp, cronJob, or ping."
+          description: "One Healthchecks check and the probe that feeds it. The operator creates and updates the check in Healthchecks, runs the probe, and sends the ping. A Check names exactly one probe: http, tls, tcp, dns, cronJob, or ping."
           required: [spec]
           properties:
             spec:
@@ -62,8 +62,8 @@ spec:
                 # The Kubernetes volume source uses the same one-of
                 # pattern: one probe block names the check's source of
                 # truth, and this rule holds a Check to one of them.
-                - rule: "[has(self.http), has(self.tls), has(self.tcp), has(self.cronJob), has(self.ping)].exists_one(block, block)"
-                  message: "a Check names exactly one of http, tls, tcp, cronJob, or ping"
+                - rule: "[has(self.http), has(self.tls), has(self.tcp), has(self.dns), has(self.cronJob), has(self.ping)].exists_one(block, block)"
+                  message: "a Check names exactly one of http, tls, tcp, dns, cronJob, or ping"
                 # ClusterProject is the only kind projectRef accepts
                 # today. A namespaced Project kind may join it later
                 # without a change to this field's type.
@@ -296,6 +296,62 @@ spec:
                               closed:
                                 type: boolean
                                 description: "Whether the port must refuse the connection or not answer, for a port that must stay shut. Default is false. A host name that does not resolve fails the connection either way."
+                dns:
+                  type: object
+                  required: [interval, queries]
+                  description: "The operator asks each question in order on every interval. The check pings success only if every answer meets its expectations. The operator asks every question even after one fails, and the failure reason names every query that failed."
+                  x-kubernetes-validations:
+                    - rule: "duration(self.interval) >= duration('1m')"
+                      message: "dns.interval is at least 1m"
+                  properties:
+                    interval:
+                      type: string
+                      pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
+                      description: "How often the operator asks every question, a Go duration string such as 5m, and the check's timeout on Healthchecks. This is at least 1m."
+                    queries:
+                      type: array
+                      minItems: 1
+                      maxItems: 64
+                      x-kubernetes-list-type: atomic
+                      description: "The questions the operator asks in order on every interval."
+                      items:
+                        type: object
+                        required: [server, lookup]
+                        description: "One question the probe asks one server, and what it expects back. The probe asks the question exactly as written, with no search domains and no hosts file."
+                        properties:
+                          name:
+                            type: string
+                            minLength: 1
+                            maxLength: 100
+                            description: "A label for the query in a failure reason, in place of its lookup, type, and server."
+                          server:
+                            type: string
+                            minLength: 1
+                            maxLength: 261
+                            description: "The server to ask, as host or host:port, such as 192.0.2.53 or dns.example.com:5353. The port is 53 when it is absent. The probe asks over UDP, and asks again over TCP when the answer is truncated."
+                          lookup:
+                            type: string
+                            minLength: 1
+                            maxLength: 254
+                            description: "The domain name to ask about. For a PTR query, it may be an address, which the probe turns into its reverse name the way dig -x does."
+                          type:
+                            type: string
+                            enum: [A, AAAA, CNAME, NS, PTR, TXT]
+                            description: "The record type to ask for. Default is A."
+                          expect:
+                            type: object
+                            description: "What a passing answer looks like. With no field set, the answer must hold at least one record of the type."
+                            properties:
+                              answers:
+                                type: array
+                                minItems: 1
+                                maxItems: 64
+                                x-kubernetes-list-type: atomic
+                                description: "The exact set of records the answer must hold, in any order: addresses for A and AAAA, names for CNAME, NS, and PTR, and the text for TXT, with a record's strings joined. Addresses match in any spelling, and names match in any case, with or without the final dot. Records of other types in the answer, such as a CNAME on the way to an address, are not compared."
+                                items:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 4096
                 cronJob:
                   type: object
                   required: [name]
@@ -357,8 +413,8 @@ spec:
                   description: "The ClusterProject that holds the check in Healthchecks. When spec.projectRef names another project, the operator deletes the check from this one before it creates the check in the new one. Empty until the first reconcile."
                 probe:
                   type: string
-                  enum: [http, tls, tcp, cronJob, ping]
-                  description: "The probe block the spec sets: http, tls, tcp, cronJob, or ping. The operator writes it so kubectl get checks can show it."
+                  enum: [http, tls, tcp, dns, cronJob, ping]
+                  description: "The probe block the spec sets: http, tls, tcp, dns, cronJob, or ping. The operator writes it so kubectl get checks can show it."
                 slug:
                   type: string
                   description: "The slug the operator last wrote this check under on Healthchecks. Empty until the first reconcile."

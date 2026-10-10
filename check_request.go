@@ -87,6 +87,8 @@ func probeInterval(spec CheckSpec) (time.Duration, error) {
 		interval = spec.TLS.Interval
 	case ProbeKindTCP:
 		interval = spec.TCP.Interval
+	case ProbeKindDNS:
+		interval = spec.DNS.Interval
 	default:
 		return 0, fmt.Errorf("the Check names no probe")
 	}

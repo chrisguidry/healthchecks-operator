@@ -15,6 +15,7 @@ func TestCheckSpecProbeKind(t *testing.T) {
 		{"http", CheckSpec{HTTP: &HTTPProbe{}}, ProbeKindHTTP},
 		{"tls", CheckSpec{TLS: &TLSProbe{}}, ProbeKindTLS},
 		{"tcp", CheckSpec{TCP: &TCPProbe{}}, ProbeKindTCP},
+		{"dns", CheckSpec{DNS: &DNSProbe{}}, ProbeKindDNS},
 		{"cronJob", CheckSpec{CronJob: &CronJobProbe{}}, ProbeKindCronJob},
 		{"ping", CheckSpec{Ping: &PingProbe{}}, ProbeKindPing},
 	}
@@ -34,6 +35,7 @@ func TestProbeKindString(t *testing.T) {
 		{ProbeKindHTTP, "http"},
 		{ProbeKindTLS, "tls"},
 		{ProbeKindTCP, "tcp"},
+		{ProbeKindDNS, "dns"},
 		{ProbeKindCronJob, "cronJob"},
 		{ProbeKindPing, "ping"},
 	}
@@ -53,6 +55,7 @@ func TestProbeKindTimed(t *testing.T) {
 		{ProbeKindHTTP, true},
 		{ProbeKindTLS, true},
 		{ProbeKindTCP, true},
+		{ProbeKindDNS, true},
 		{ProbeKindCronJob, false},
 		{ProbeKindPing, false},
 	}

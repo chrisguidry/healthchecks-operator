@@ -120,6 +120,28 @@ func TestATCPCheckPingsFailForAPortThatRefuses(t *testing.T) {
 	mustMatch(t, h.pingKinds(got.Status.UUID), "fail: "+address+": connect: connection refused")
 }
 
+// A dns probe of a name that does not exist fails, and the reason names
+// the query and the response code.
+func TestADNSCheckPingsFailForANameThatDoesNotExist(t *testing.T) {
+	h := startHarness(t)
+	server := serveDNS(t)
+	check := httpCheck("example", "names", "")
+	check.Spec.HTTP = nil
+	check.Spec.DNS = &DNSProbe{Interval: "5m", Queries: []DNSQuery{{Server: server, Lookup: "missing.example.com"}}}
+	h.api.create(checksResource, check)
+	h.runProbes()
+
+	h.pass()
+
+	got := h.probedCheck("example", "names")
+	stored, _ := h.hc.Check("example-names")
+	reason := "missing.example.com A @" + server + ": NXDOMAIN"
+	mustMatch(t, stored.Timeout.String(), "5m0s")
+	mustMatch(t, got.Status.Probe, "dns")
+	mustMatch(t, conditionOf(got, "Passing").Message, reason)
+	mustMatch(t, h.pingKinds(got.Status.UUID), "fail: "+reason)
+}
+
 // A Check that becomes a cronJob check stops its probe, and loses the
 // Passing condition that only a probe sets.
 func TestACheckThatStopsProbingLosesPassing(t *testing.T) {

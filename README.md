@@ -2,8 +2,8 @@
 
 healthchecks-operator creates checks on a [Healthchecks](https://healthchecks.io)
 instance from Kubernetes resources, and it sends the pings for most of those
-checks itself. It probes HTTP endpoints, TLS certificates, and TCP ports on a
-timer, and it reports each run of a CronJob. For a workload that pings Healthchecks itself,
+checks itself. It probes HTTP endpoints, TLS certificates, TCP ports, and DNS
+answers on a timer, and it reports each run of a CronJob. For a workload that pings Healthchecks itself,
 the operator writes the check's ping URL into a ConfigMap.
 
 It works with healthchecks.io and with a self-hosted Healthchecks.
@@ -91,7 +91,7 @@ name matched.
 
 A `Check` is one check in Healthchecks and the probe that feeds it. It is in
 the namespace of the workload it watches, and it has exactly one of
-`http`, `tls`, `tcp`, `cronJob`, or `ping`. The operator sets the check's period in
+`http`, `tls`, `tcp`, `dns`, `cronJob`, or `ping`. The operator sets the check's period in
 Healthchecks from the probe, so you never write it twice.
 
 ### HTTP
@@ -184,6 +184,40 @@ around: the port must refuse the connection or not answer. A host name that
 does not resolve fails the connection either way, because it says nothing
 about the port. Like an `http` check, a `tcp` check opens every connection
 even when one fails, and its reason names every connection that failed.
+
+### DNS answers
+
+```yaml
+spec:
+  dns:
+    interval: 5m
+    queries:
+      - server: 192.0.2.53
+        lookup: www.example.com
+        expect:
+          answers: [192.0.2.10, 192.0.2.11]
+      - name: the public answer
+        server: 9.9.9.9
+        lookup: www.example.com
+        type: AAAA
+      - server: 192.0.2.53
+        lookup: 192.0.2.10
+        type: PTR
+        expect:
+          answers: [www.example.com]
+```
+
+Every `interval`, the operator asks each server its question exactly as
+written, with no search domains and no hosts file, so the check sees what
+that server answers. `type` is `A`, `AAAA`, `CNAME`, `NS`, `PTR`, or `TXT`,
+and the default is `A`. A `PTR` lookup takes an address, the way `dig -x`
+does. With no expectation, the answer must hold at least one record of the
+type. `answers` is the exact set it must hold, in any order. Addresses match
+in any spelling, names match in any case, with or without the final dot, and
+a `TXT` record's strings are joined. A failure names the response code, such
+as `NXDOMAIN`, or the records that are missing and unexpected. The probe asks
+over UDP up to three times, and asks again over TCP when the answer is
+truncated.
 
 ### A CronJob's runs
 
@@ -299,7 +333,7 @@ Deleting a `Check` deletes its check in Healthchecks, with its history.
 A `Check` whose slug matches a check that already exists in the project
 takes that check over, with its ping URL and its history. Set `spec.slug`
 to the existing check's slug, and `spec.displayName` to its name. An
-`http`, `tls`, or `tcp` probe runs at once on a check it takes over, because that
+`http`, `tls`, `tcp`, or `dns` probe runs at once on a check it takes over, because that
 check may have gone longer without a ping than the probe's interval.
 
 If Terraform made the check with the `healthchecksio` provider, replace
@@ -323,6 +357,7 @@ Healthchecks shows it in the check's log:
 ```
 https://proxy.example.net/: status 502, want 200
 ssh: banner does not contain "SSH-2.0-", got "220 example.com ESMTP\r\n"
+www.example.com A @192.0.2.53: missing 192.0.2.11; unexpected 192.0.2.12
 example.com:443: certificate expires 2026-10-03T00:00:00Z, 6d left, want at least 14d
 backup-29842019: BackoffLimitExceeded: Job has reached the specified backoff limit
 ```
