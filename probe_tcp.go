@@ -116,10 +116,15 @@ func (p *tcpProber) compareBanner(conn net.Conn, contains string) string {
 }
 
 // describeError drops the "dial tcp <address>:" that net puts in front
-// of its errors, because the reason already starts with the address.
+// of its errors, because the reason already starts with the address. A
+// lookup error leaves out the resolver it asked, which is the
+// operator's own and says nothing about the target.
 func (p *tcpProber) describeError(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
 		return fmt.Sprintf("no answer within %s", p.timeout)
+	}
+	if dnsError, ok := errors.AsType[*net.DNSError](err); ok {
+		return fmt.Sprintf("lookup %s: %s", dnsError.Name, dnsError.Err)
 	}
 	if opError, ok := errors.AsType[*net.OpError](err); ok {
 		return opError.Err.Error()

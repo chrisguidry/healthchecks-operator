@@ -117,14 +117,16 @@ func TestTCPProbeGivesUpOnAPortThatSendsNoBanner(t *testing.T) {
 
 // A name that does not resolve is a fault in the spec or in DNS, not a
 // closed port, so it fails a connection that expects the port closed.
+// Go's resolver refuses every .onion name without asking DNS, as RFC
+// 7686 asks, so the test needs no DNS server.
 func TestTCPProbeFailsAClosedExpectationOnANameThatDoesNotResolve(t *testing.T) {
 	p, err := newTCPProber(TCPProbe{Interval: "5m", Connections: []TCPConnection{
-		{Address: "no-such-host.invalid:22", Expect: TCPExpectation{Closed: true}}}})
+		{Address: "no-such-host.onion:22", Expect: TCPExpectation{Closed: true}}}})
 	mustSucceed(t, err)
 
 	result := p.probe(t.Context())
 
-	mustMatch(t, result.passed, false)
+	mustMatch(t, result, probeResult{reason: "no-such-host.onion:22: lookup no-such-host.onion: no such host"})
 }
 
 func TestTCPProberRejectsASpecItCannotDial(t *testing.T) {
