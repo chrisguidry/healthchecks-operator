@@ -2,8 +2,8 @@
 
 healthchecks-operator creates checks on a [Healthchecks](https://healthchecks.io)
 instance from Kubernetes resources, and it sends the pings for most of those
-checks itself. It probes HTTP endpoints and TLS certificates on a timer, and it
-reports the result of each run of a CronJob. For a workload that pings
+checks itself. It probes HTTP endpoints, TLS certificates, and TCP ports on a
+timer, and it reports the result of each run of a CronJob. For a workload that pings
 Healthchecks itself, it writes the check's ping URL into a ConfigMap.
 
 ## What it replaces
@@ -86,16 +86,16 @@ spec:
   tags: [internet, website]
   grace: 15m
   channels: [Pushover]            # optional; replaces the project's list
-  http: { ... }                   # exactly one of http, tls, cronJob, ping
+  http: { ... }                   # exactly one of http, tls, tcp, cronJob, ping
 ```
 
 - `projectRef.kind` has one legal value today, `ClusterProject`. The field
   exists so that `Project` can be added without a schema change. When
   `Project` exists, a `Check` can name a `Project` only in its own namespace.
 - A CEL rule (`x-kubernetes-validations`) requires exactly one of `http`,
-  `tls`, `cronJob`, and `ping`. The Kubernetes volume source uses the same
+  `tls`, `tcp`, `cronJob`, and `ping`. The Kubernetes volume source uses the same
   pattern.
-- An `http`, `tls`, or `cronJob` `Check` does not set a Healthchecks
+- An `http`, `tls`, `tcp`, or `cronJob` `Check` does not set a Healthchecks
   schedule. The operator derives the schedule from the probe, so the check
   and the thing it watches cannot disagree. A `ping` `Check` states its own,
   because the operator does not see the workload that pings.
@@ -166,6 +166,39 @@ tls:
 The check fails if the certificate does not verify, or if less than
 `minRemaining` remains before it expires. The Healthchecks timeout is
 `interval`.
+
+#### tcp
+
+The operator opens each connection in order on every interval. The check
+pings success only if every connection meets its expectations, and it opens
+every connection even after one fails.
+
+```yaml
+tcp:
+  interval: 5m
+  connections:
+    - name: ssh
+      address: example.com:22
+      expect:
+        bannerContains: "SSH-2.0-"
+    - address: example.com:2222
+      expect:
+        closed: true
+```
+
+- `address` is `host:port`. A CRD pattern requires the port, and the
+  prober refuses an address that `net.SplitHostPort` cannot split.
+- With no expectation, the port must accept the connection.
+- `bannerContains` is text that the server's first bytes must contain. The
+  probe reads until the text appears, the server stops sending, 4 KiB
+  arrive, or the probe timeout passes. A failure quotes the first 120 bytes
+  of what arrived, so the reason tells one server's greeting from another's.
+- `closed: true` passes a port that refuses the connection or does not
+  answer, the two ways a firewall keeps a port shut. A host name that does
+  not resolve fails, because it says nothing about the port. A CEL rule
+  keeps `bannerContains` off a connection that expects the port closed.
+- `name` labels a connection in a failure reason in place of its address.
+- The Healthchecks timeout is `interval`, at least `1m`.
 
 #### cronJob
 
@@ -290,7 +323,7 @@ the same as the current one.
 `Check` status:
 
 - `slug`, `uuid`, `pingURL`: the check in Healthchecks.
-- `probe`: which probe block the spec sets, `http`, `tls`, `cronJob`, or
+- `probe`: which probe block the spec sets, `http`, `tls`, `tcp`, `cronJob`, or
   `ping`, so `kubectl get checks` can show it in a column.
 - `lastReportedJob`: the name of the last Job the operator pinged for, for
   a `cronJob` check.
@@ -301,7 +334,7 @@ the same as the current one.
   into, for a `ping` check.
 - Conditions:
   - `Ready`: the check exists in Healthchecks and matches the spec.
-  - `Passing`: for `http` and `tls`, the last probe passed. For `cronJob`,
+  - `Passing`: for `http`, `tls`, and `tcp`, the last probe passed. For `cronJob`,
     the last run the operator reported succeeded. When it is `False`, the
     message is the failure reason, the same text as the ping body. A
     `cronJob` check has no `Passing` until the operator reports its first
@@ -337,7 +370,7 @@ check's log. The same text is the message of the `Passing` condition.
   made before it is never reported a second time. A place that another
   CronJob owns does not count, and a Check that changes its CronJob
   reports only that CronJob's newest finished Job.
-- An `http` or `tls` probe that was due while the operator was down runs as
+- An `http`, `tls`, or `tcp` probe that was due while the operator was down runs as
   soon as the operator starts.
 
 ## Operator heartbeat
@@ -401,7 +434,7 @@ The operator follows the patterns of the liken-sh operators
 - The operator watches ConfigMaps in all namespaces with the label selector
   `app.kubernetes.io/managed-by=healthchecks-operator`, so its memory holds
   the ConfigMaps it wrote and no others.
-- `http` and `tls` probes run from one timer heap in one goroutine. Each
+- `http`, `tls`, and `tcp` probes run from one timer heap in one goroutine. Each
   probe is an entry at its next due time. There is no goroutine and no
   requeue for each `Check`.
 - In steady state, the only outbound traffic is probes and pings.

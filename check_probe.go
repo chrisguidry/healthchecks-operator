@@ -1,6 +1,6 @@
 package main
 
-// An http or tls Check has a prober in the probe schedule, registered
+// An http, tls, or tcp Check has a prober in the probe schedule, registered
 // under the Check's namespace/name. The schedule hands each result to
 // report, which pings the check and records the result in the Passing
 // condition.
@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/chrisguidry/healthchecks-operator/healthchecks"
@@ -31,6 +32,8 @@ func probeIdentity(spec CheckSpec) string {
 		block = spec.HTTP
 	case ProbeKindTLS:
 		block = spec.TLS
+	case ProbeKindTCP:
+		block = spec.TCP
 	default:
 		return ""
 	}
@@ -52,15 +55,7 @@ func (c *controller) registerProbe(state *checkState, check *Check, pingURL stri
 		c.stopProbe(state)
 		return verdict{reasonInvalidSpec, errorText(err)}
 	}
-	var built prober
-	var kind string
-	if check.Spec.ProbeKind() == ProbeKindHTTP {
-		built, err = newHTTPProber(*check.Spec.HTTP, state.namespace, c.client)
-		kind = probeHTTP
-	} else {
-		built, err = newTLSProber(*check.Spec.TLS)
-		kind = probeTLS
-	}
+	built, err := c.buildProber(check.Spec, state.namespace)
 	if err != nil {
 		c.stopProbe(state)
 		return verdict{reasonProbeInvalid, errorText(err)}
@@ -73,9 +68,23 @@ func (c *controller) registerProbe(state *checkState, check *Check, pingURL stri
 		// key starts again, and a new key is due at once.
 		c.schedule.remove(key)
 	}
-	c.schedule.set(key, interval, timedProber{built, kind, c.readings})
+	c.schedule.set(key, interval, timedProber{built, check.Spec.ProbeKind().String(), c.readings})
 	state.probe, state.probeURL = identity, pingURL
 	return synced
+}
+
+// buildProber builds the prober for a spec whose probe kind is timed.
+func (c *controller) buildProber(spec CheckSpec, namespace string) (prober, error) {
+	switch spec.ProbeKind() {
+	case ProbeKindHTTP:
+		return newHTTPProber(*spec.HTTP, namespace, c.client)
+	case ProbeKindTLS:
+		return newTLSProber(*spec.TLS)
+	case ProbeKindTCP:
+		return newTCPProber(*spec.TCP)
+	default:
+		return nil, fmt.Errorf("a %s check has no prober", spec.ProbeKind())
+	}
 }
 
 // stopProbe removes the Check's prober from the schedule, if it has

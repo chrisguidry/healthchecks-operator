@@ -40,6 +40,17 @@ func tlsSpec() map[string]any {
 	}
 }
 
+// tcpSpec is a tcp check with the connection given.
+func tcpSpec(connection map[string]any) map[string]any {
+	return map[string]any{
+		"projectRef": projectRef(),
+		"tcp": map[string]any{
+			"interval":    "5m",
+			"connections": []any{connection},
+		},
+	}
+}
+
 func cronJobSpec() map[string]any {
 	return map[string]any{
 		"projectRef": projectRef(),
@@ -61,6 +72,14 @@ func TestCheckCRDValidatesExamples(t *testing.T) {
 		{name: "an http check", object: check(httpSpec())},
 		{name: "a tls check", object: check(tlsSpec())},
 		{name: "a cronJob check", object: check(cronJobSpec())},
+		{name: "a tcp check", object: check(tcpSpec(map[string]any{"address": "example.com:22"}))},
+		{name: "a tcp check on an IPv6 address", object: check(tcpSpec(map[string]any{"address": "[2001:db8::1]:22"}))},
+		{name: "a tcp check that expects a banner", object: check(tcpSpec(map[string]any{"address": "example.com:22", "expect": map[string]any{"bannerContains": "SSH-2.0-"}}))},
+		{name: "a tcp check that expects the port closed", object: check(tcpSpec(map[string]any{"address": "example.com:2222", "expect": map[string]any{"closed": true}}))},
+		{name: "a tcp check that expects a banner from a closed port", object: check(tcpSpec(map[string]any{"address": "example.com:22", "expect": map[string]any{"closed": true, "bannerContains": "SSH-"}})), wantErr: true},
+		{name: "a tcp check with no port", object: check(tcpSpec(map[string]any{"address": "example.com"})), wantErr: true},
+		{name: "a tcp check with no connections", object: check(map[string]any{"projectRef": projectRef(), "tcp": map[string]any{"interval": "5m", "connections": []any{}}}), wantErr: true},
+		{name: "a tcp interval under a minute", object: check(map[string]any{"projectRef": projectRef(), "tcp": map[string]any{"interval": "30s", "connections": []any{map[string]any{"address": "example.com:22"}}}}), wantErr: true},
 		{name: "a ping check on a schedule", object: check(pingSpec(map[string]any{"schedule": "0 3 * * *"}))},
 		{name: "a ping check on a schedule in a time zone", object: check(pingSpec(map[string]any{"schedule": "0 3 * * *", "timeZone": "America/New_York"}))},
 		{name: "a ping check with a timeout", object: check(pingSpec(map[string]any{"timeout": "24h"}))},

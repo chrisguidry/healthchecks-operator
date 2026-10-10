@@ -2,8 +2,8 @@
 
 healthchecks-operator creates checks on a [Healthchecks](https://healthchecks.io)
 instance from Kubernetes resources, and it sends the pings for most of those
-checks itself. It probes HTTP endpoints and TLS certificates on a timer, and it
-reports each run of a CronJob. For a workload that pings Healthchecks itself,
+checks itself. It probes HTTP endpoints, TLS certificates, and TCP ports on a
+timer, and it reports each run of a CronJob. For a workload that pings Healthchecks itself,
 the operator writes the check's ping URL into a ConfigMap.
 
 It works with healthchecks.io and with a self-hosted Healthchecks.
@@ -91,7 +91,7 @@ name matched.
 
 A `Check` is one check in Healthchecks and the probe that feeds it. It is in
 the namespace of the workload it watches, and it has exactly one of
-`http`, `tls`, `cronJob`, or `ping`. The operator sets the check's period in
+`http`, `tls`, `tcp`, `cronJob`, or `ping`. The operator sets the check's period in
 Healthchecks from the probe, so you never write it twice.
 
 ### HTTP
@@ -157,6 +157,33 @@ spec:
 The check fails when the certificate does not verify, or when less than
 `minRemaining` is left before it expires. `host` takes an optional port, and
 the port is 443 when it is absent.
+
+### TCP ports
+
+```yaml
+spec:
+  tcp:
+    interval: 5m
+    connections:
+      - name: ssh
+        address: example.com:22
+        expect:
+          bannerContains: "SSH-2.0-"
+      - address: example.com:443
+      - name: the old ssh port stays shut
+        address: example.com:2222
+        expect:
+          closed: true
+```
+
+Every `interval`, the operator opens each connection in order. With no
+expectation, the port must accept the connection. `bannerContains` is text
+that the first bytes the server sends must contain, for a protocol where the
+server speaks first, such as SSH or SMTP. `closed: true` turns the check
+around: the port must refuse the connection or not answer. A host name that
+does not resolve fails the connection either way, because it says nothing
+about the port. Like an `http` check, a `tcp` check opens every connection
+even when one fails, and its reason names every connection that failed.
 
 ### A CronJob's runs
 
@@ -272,7 +299,7 @@ Deleting a `Check` deletes its check in Healthchecks, with its history.
 A `Check` whose slug matches a check that already exists in the project
 takes that check over, with its ping URL and its history. Set `spec.slug`
 to the existing check's slug, and `spec.displayName` to its name. An
-`http` or `tls` probe runs at once on a check it takes over, because that
+`http`, `tls`, or `tcp` probe runs at once on a check it takes over, because that
 check may have gone longer without a ping than the probe's interval.
 
 If Terraform made the check with the `healthchecksio` provider, replace
@@ -295,6 +322,7 @@ Healthchecks shows it in the check's log:
 
 ```
 https://proxy.example.net/: status 502, want 200
+ssh: banner does not contain "SSH-2.0-", got "220 example.com ESMTP\r\n"
 example.com:443: certificate expires 2026-10-03T00:00:00Z, 6d left, want at least 14d
 backup-29842019: BackoffLimitExceeded: Job has reached the specified backoff limit
 ```

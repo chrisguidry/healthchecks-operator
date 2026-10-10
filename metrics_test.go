@@ -54,7 +54,7 @@ func TestEachObservationMovesItsSeries(t *testing.T) {
 	m.observePass(5 * time.Millisecond)
 	m.reconcileFailed(checkKind)
 	m.watchRestarted("checks")()
-	m.observeProbe(probeHTTP, false, 30*time.Millisecond)
+	m.observeProbe(ProbeKindHTTP.String(), false, 30*time.Millisecond)
 	m.observePing(pingFail, nil)
 	m.observePing(pingSuccess, errors.New("connection refused"))
 

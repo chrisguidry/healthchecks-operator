@@ -51,7 +51,7 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
-          description: "One Healthchecks check and the probe that feeds it. The operator creates and updates the check in Healthchecks, runs the probe, and sends the ping. A Check names exactly one probe: http, tls, cronJob, or ping."
+          description: "One Healthchecks check and the probe that feeds it. The operator creates and updates the check in Healthchecks, runs the probe, and sends the ping. A Check names exactly one probe: http, tls, tcp, cronJob, or ping."
           required: [spec]
           properties:
             spec:
@@ -62,8 +62,8 @@ spec:
                 # The Kubernetes volume source uses the same one-of
                 # pattern: one probe block names the check's source of
                 # truth, and this rule holds a Check to one of them.
-                - rule: "[has(self.http), has(self.tls), has(self.cronJob), has(self.ping)].exists_one(block, block)"
-                  message: "a Check names exactly one of http, tls, cronJob, or ping"
+                - rule: "[has(self.http), has(self.tls), has(self.tcp), has(self.cronJob), has(self.ping)].exists_one(block, block)"
+                  message: "a Check names exactly one of http, tls, tcp, cronJob, or ping"
                 # ClusterProject is the only kind projectRef accepts
                 # today. A namespaced Project kind may join it later
                 # without a change to this field's type.
@@ -247,6 +247,55 @@ spec:
                       type: string
                       pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
                       description: "How long before expiry the certificate must still have left, a Go duration string such as 336h. It must be greater than zero."
+                tcp:
+                  type: object
+                  required: [interval, connections]
+                  description: "The operator opens each connection in order on every interval. The check pings success only if every connection meets its expectations. The operator opens every connection even after one fails, and the failure reason names every connection that failed."
+                  x-kubernetes-validations:
+                    - rule: "duration(self.interval) >= duration('1m')"
+                      message: "tcp.interval is at least 1m"
+                  properties:
+                    interval:
+                      type: string
+                      pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
+                      description: "How often the operator opens every connection, a Go duration string such as 5m, and the check's timeout on Healthchecks. This is at least 1m."
+                    connections:
+                      type: array
+                      minItems: 1
+                      maxItems: 32
+                      x-kubernetes-list-type: atomic
+                      description: "The connections the operator opens in order on every interval."
+                      items:
+                        type: object
+                        required: [address]
+                        description: "One connection the probe opens, and what it expects."
+                        properties:
+                          name:
+                            type: string
+                            minLength: 1
+                            maxLength: 100
+                            description: "A label for the connection in a failure reason, in place of its address."
+                          address:
+                            type: string
+                            minLength: 1
+                            maxLength: 261
+                            pattern: '^.+:[0-9]{1,5}$'
+                            description: "The host and port to connect to, such as example.com:22 or [2001:db8::1]:22."
+                          expect:
+                            type: object
+                            description: "What a passing connection looks like. With no field set, the port must accept the connection."
+                            x-kubernetes-validations:
+                              - rule: "!(has(self.closed) && self.closed && has(self.bannerContains))"
+                                message: "a connection that expects the port closed expects no banner"
+                            properties:
+                              bannerContains:
+                                type: string
+                                minLength: 1
+                                maxLength: 1024
+                                description: "Text that the first bytes the server sends must contain, such as SSH-2.0- for an SSH server. The probe reads up to 4 KiB, and waits up to 10 seconds for it."
+                              closed:
+                                type: boolean
+                                description: "Whether the port must refuse the connection or not answer, for a port that must stay shut. Default is false. A host name that does not resolve fails the connection either way."
                 cronJob:
                   type: object
                   required: [name]
@@ -308,8 +357,8 @@ spec:
                   description: "The ClusterProject that holds the check in Healthchecks. When spec.projectRef names another project, the operator deletes the check from this one before it creates the check in the new one. Empty until the first reconcile."
                 probe:
                   type: string
-                  enum: [http, tls, cronJob, ping]
-                  description: "The probe block the spec sets: http, tls, cronJob, or ping. The operator writes it so kubectl get checks can show it."
+                  enum: [http, tls, tcp, cronJob, ping]
+                  description: "The probe block the spec sets: http, tls, tcp, cronJob, or ping. The operator writes it so kubectl get checks can show it."
                 slug:
                   type: string
                   description: "The slug the operator last wrote this check under on Healthchecks. Empty until the first reconcile."

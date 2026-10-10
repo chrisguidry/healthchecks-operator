@@ -23,13 +23,6 @@ const (
 	checkKind          = "Check"
 )
 
-// The probe kinds that run on the timer. A cronJob check has no probe:
-// it reports Jobs that already ran.
-const (
-	probeHTTP = "http"
-	probeTLS  = "tls"
-)
-
 // The pings a check sends to Healthchecks. The operator's own heartbeat
 // counts as a success ping.
 const (
@@ -112,7 +105,8 @@ func newMetrics(version string) *metrics {
 	for _, resource := range watchedResources {
 		m.watchRestarts.WithLabelValues(resource)
 	}
-	for _, probe := range []string{probeHTTP, probeTLS} {
+	for _, kind := range timedProbeKinds {
+		probe := kind.String()
 		m.probeDuration.WithLabelValues(probe)
 		m.probes.WithLabelValues(probe, "pass")
 		m.probes.WithLabelValues(probe, "fail")

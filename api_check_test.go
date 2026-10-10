@@ -14,6 +14,7 @@ func TestCheckSpecProbeKind(t *testing.T) {
 		{"no probe", CheckSpec{}, ProbeKindNone},
 		{"http", CheckSpec{HTTP: &HTTPProbe{}}, ProbeKindHTTP},
 		{"tls", CheckSpec{TLS: &TLSProbe{}}, ProbeKindTLS},
+		{"tcp", CheckSpec{TCP: &TCPProbe{}}, ProbeKindTCP},
 		{"cronJob", CheckSpec{CronJob: &CronJobProbe{}}, ProbeKindCronJob},
 		{"ping", CheckSpec{Ping: &PingProbe{}}, ProbeKindPing},
 	}
@@ -32,12 +33,32 @@ func TestProbeKindString(t *testing.T) {
 		{ProbeKindNone, "none"},
 		{ProbeKindHTTP, "http"},
 		{ProbeKindTLS, "tls"},
+		{ProbeKindTCP, "tcp"},
 		{ProbeKindCronJob, "cronJob"},
 		{ProbeKindPing, "ping"},
 	}
 	for _, c := range cases {
 		t.Run(c.want, func(t *testing.T) {
 			mustMatch(t, c.kind.String(), c.want)
+		})
+	}
+}
+
+func TestProbeKindTimed(t *testing.T) {
+	cases := []struct {
+		kind ProbeKind
+		want bool
+	}{
+		{ProbeKindNone, false},
+		{ProbeKindHTTP, true},
+		{ProbeKindTLS, true},
+		{ProbeKindTCP, true},
+		{ProbeKindCronJob, false},
+		{ProbeKindPing, false},
+	}
+	for _, c := range cases {
+		t.Run(c.kind.String(), func(t *testing.T) {
+			mustMatch(t, c.kind.timed(), c.want)
 		})
 	}
 }

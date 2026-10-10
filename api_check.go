@@ -112,8 +112,8 @@ type ProjectRef struct {
 
 // CheckSpec names the project, the check's identity and defaults on
 // Healthchecks, and the one probe that feeds it. A CEL rule holds a
-// Check to exactly one of HTTP, TLS, CronJob, and Ping; ProbeKind reads
-// whichever one is set.
+// Check to exactly one of HTTP, TLS, TCP, DNS, CronJob, and Ping;
+// ProbeKind reads whichever one is set.
 type CheckSpec struct {
 	ProjectRef  ProjectRef `json:"projectRef"`
 	DisplayName string     `json:"displayName,omitempty"`
@@ -126,6 +126,7 @@ type CheckSpec struct {
 	Channels []string      `json:"channels,omitempty"`
 	HTTP     *HTTPProbe    `json:"http,omitempty"`
 	TLS      *TLSProbe     `json:"tls,omitempty"`
+	TCP      *TCPProbe     `json:"tcp,omitempty"`
 	CronJob  *CronJobProbe `json:"cronJob,omitempty"`
 	Ping     *PingProbe    `json:"ping,omitempty"`
 }
@@ -137,6 +138,7 @@ const (
 	ProbeKindNone ProbeKind = iota
 	ProbeKindHTTP
 	ProbeKindTLS
+	ProbeKindTCP
 	ProbeKindCronJob
 	ProbeKindPing
 )
@@ -147,6 +149,8 @@ func (k ProbeKind) String() string {
 		return "http"
 	case ProbeKindTLS:
 		return "tls"
+	case ProbeKindTCP:
+		return "tcp"
 	case ProbeKindCronJob:
 		return "cronJob"
 	case ProbeKindPing:
@@ -156,15 +160,26 @@ func (k ProbeKind) String() string {
 	}
 }
 
+// timedProbeKinds are the kinds that run a prober on the timer. A
+// cronJob check reports Jobs that already ran, and a ping check is
+// pinged by its workload, so neither has a prober.
+var timedProbeKinds = []ProbeKind{ProbeKindHTTP, ProbeKindTLS, ProbeKindTCP}
+
+// timed reports whether the kind runs a prober on the timer.
+func (k ProbeKind) timed() bool {
+	return slices.Contains(timedProbeKinds, k)
+}
+
 // ProbeKind answers which probe block is set, so a caller switches on
-// one typed value instead of chaining nil checks across HTTP, TLS,
-// CronJob, and Ping.
+// one typed value instead of chaining nil checks across the blocks.
 func (s CheckSpec) ProbeKind() ProbeKind {
 	switch {
 	case s.HTTP != nil:
 		return ProbeKindHTTP
 	case s.TLS != nil:
 		return ProbeKindTLS
+	case s.TCP != nil:
+		return ProbeKindTCP
 	case s.CronJob != nil:
 		return ProbeKindCronJob
 	case s.Ping != nil:
@@ -239,6 +254,38 @@ type TLSProbe struct {
 	Host     string `json:"host"`
 	// MinRemaining is a Go duration string, greater than zero.
 	MinRemaining string `json:"minRemaining"`
+}
+
+// TCPProbe opens every connection in Connections, in order, on every
+// Interval. The check pings success only if every connection meets its
+// expectations, and a failure names every connection that missed one.
+type TCPProbe struct {
+	// Interval is a Go duration string, at least 1m, and the check's
+	// timeout on Healthchecks.
+	Interval    string          `json:"interval"`
+	Connections []TCPConnection `json:"connections"`
+}
+
+// TCPConnection is one connection the probe opens, and what it expects.
+type TCPConnection struct {
+	// Name labels the connection in a failure reason in place of its
+	// address.
+	Name string `json:"name,omitempty"`
+	// Address is host:port.
+	Address string         `json:"address"`
+	Expect  TCPExpectation `json:"expect,omitempty"`
+}
+
+// TCPExpectation is what a passing connection looks like. With no
+// field set, the port must accept the connection. A CEL rule keeps
+// BannerContains off a connection that expects the port Closed.
+type TCPExpectation struct {
+	// BannerContains is text that the server's first bytes must
+	// contain, such as SSH-2.0- for an SSH server, which speaks first.
+	BannerContains string `json:"bannerContains,omitempty"`
+	// Closed turns the expectation around: the port must refuse the
+	// connection or not answer, for a port that must stay shut.
+	Closed bool `json:"closed,omitempty"`
 }
 
 // CronJobProbe reports each run of the named CronJob in the Check's own

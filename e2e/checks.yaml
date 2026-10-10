@@ -52,6 +52,22 @@ spec:
   projectRef: {kind: ClusterProject, name: e2e}
   tls: {interval: 1m, host: kubernetes.default.svc, minRemaining: 24h}
 ---
+# Passes: the Healthchecks port accepts, and a port nothing listens on
+# refuses, which a connection that expects it closed wants.
+apiVersion: healthchecks.guid.foo/v1alpha1
+kind: Check
+metadata: {name: healthchecks-port, namespace: example}
+spec:
+  projectRef: {kind: ClusterProject, name: e2e}
+  tcp:
+    interval: 1m
+    connections:
+      - name: the Healthchecks port
+        address: hc-e2e-healthchecks:8000
+      - name: a port nothing listens on
+        address: hc-e2e-healthchecks:8001
+        expect: {closed: true}
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata: {name: backup, namespace: example}

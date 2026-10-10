@@ -99,6 +99,27 @@ func TestATLSCheckPingsFailForACertificateThatDoesNotVerify(t *testing.T) {
 	mustMatch(t, h.pingKinds(got.Status.UUID), "fail: "+conditionOf(got, "Passing").Message)
 }
 
+// A tcp probe of a port that refuses fails, and the reason names the
+// port and the refusal.
+func TestATCPCheckPingsFailForAPortThatRefuses(t *testing.T) {
+	h := startHarness(t)
+	address := closedAddress(t)
+	check := httpCheck("example", "ssh", "")
+	check.Spec.HTTP = nil
+	check.Spec.TCP = &TCPProbe{Interval: "5m", Connections: []TCPConnection{{Address: address}}}
+	h.api.create(checksResource, check)
+	h.runProbes()
+
+	h.pass()
+
+	got := h.probedCheck("example", "ssh")
+	stored, _ := h.hc.Check("example-ssh")
+	mustMatch(t, stored.Timeout.String(), "5m0s")
+	mustMatch(t, got.Status.Probe, "tcp")
+	mustMatch(t, conditionOf(got, "Passing").Message, address+": connect: connection refused")
+	mustMatch(t, h.pingKinds(got.Status.UUID), "fail: "+address+": connect: connection refused")
+}
+
 // A Check that becomes a cronJob check stops its probe, and loses the
 // Passing condition that only a probe sets.
 func TestACheckThatStopsProbingLosesPassing(t *testing.T) {

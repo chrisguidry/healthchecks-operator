@@ -139,7 +139,7 @@ func (c *controller) reconcileCheck(ctx context.Context, check *Check, w *world)
 		return
 	}
 	kind := check.Spec.ProbeKind()
-	if kind != ProbeKindHTTP && kind != ProbeKindTLS {
+	if !kind.timed() {
 		c.stopProbe(state)
 	}
 

@@ -98,17 +98,6 @@ func TestTLSProbeFailsForAnUntrustedCertificate(t *testing.T) {
 	mustMatch(t, result, probeResult{reason: host + ": tls: failed to verify certificate: x509: certificate signed by unknown authority"})
 }
 
-// closedAddress is an address on this machine that refuses
-// connections: a listener's port, after the listener closed.
-func closedAddress(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	mustSucceed(t, err)
-	address := listener.Addr().String()
-	mustSucceed(t, listener.Close())
-	return address
-}
-
 func TestTLSProbeFailsWhenTheHostRefusesTheConnection(t *testing.T) {
 	host := closedAddress(t)
 	p, err := newTLSProber(TLSProbe{Interval: "24h", Host: host, MinRemaining: "336h"})
