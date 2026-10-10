@@ -176,8 +176,9 @@ func (s CheckSpec) ProbeKind() ProbeKind {
 
 // HTTPProbe sends every request in Requests, in order, on every
 // Interval. The check pings success only if every request meets its
-// expectations. Requests do not follow redirects, so a redirect is
-// something a request can expect.
+// expectations, and a failure names every request that missed one.
+// Requests do not follow redirects, so a redirect is something a
+// request can expect.
 type HTTPProbe struct {
 	// Interval is a Go duration string, at least 1m, and the check's
 	// timeout on Healthchecks.
@@ -187,7 +188,11 @@ type HTTPProbe struct {
 
 // HTTPRequest is one request the probe sends, and what it expects back.
 type HTTPRequest struct {
-	URL string `json:"url"`
+	// Name labels the request in a failure reason in place of its URL,
+	// for a request whose URL does not say what it probes, such as an
+	// ingress address with a Host header.
+	Name string `json:"name,omitempty"`
+	URL  string `json:"url"`
 	// TLSVerify is a pointer because absent means true: the probe
 	// verifies the server's certificate unless a request turns that off.
 	TLSVerify *bool `json:"tlsVerify,omitempty"`

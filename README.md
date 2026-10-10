@@ -116,7 +116,8 @@ spec:
           status: [301, 308]
           headers:
             Location: https://example.com/
-      - url: https://proxy.example.net/
+      - name: the site through the proxy
+        url: https://proxy.example.net/
         headers:
           - name: Host
             value: example.com
@@ -136,6 +137,9 @@ keeps a `Host` header only when its `Location` is relative, sends none of
 the request's headers to another host, and is never followed from https to
 http. Cookies set along the way come back on the next hop. The check passes only
 if every request gets the status, the headers, and the body text it expects.
+The operator sends every request even when one fails, and the failure reason
+names every request that failed and every expectation it missed. A request's
+`name` labels it in that reason in place of its URL.
 A header takes a `value`, or a `valueFrom` that reads a Secret in the
 `Check`'s namespace. Set `tlsVerify: false` on a request to skip certificate
 verification. The check's timeout in Healthchecks is `interval`.
@@ -293,6 +297,16 @@ Healthchecks shows it in the check's log:
 https://proxy.example.net/: status 502, want 200
 example.com:443: certificate expires 2026-10-03T00:00:00Z, 6d left, want at least 14d
 backup-29842019: BackoffLimitExceeded: Job has reached the specified backoff limit
+```
+
+When more than one request fails, the reason starts with a count and gives
+each failed request a line of its own. One request that misses several
+expectations lists them all:
+
+```
+2 of 3 requests failed
+https://example.com/: status 500, want 200; body does not contain "Welcome"
+the site through the proxy: status 502, want 200; body does not contain "Welcome"
 ```
 
 The same reason is the message of the `Check`'s `Passing` condition. For a

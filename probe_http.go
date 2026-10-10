@@ -132,16 +132,25 @@ func probeClient(transport *http.Transport, request HTTPRequest, hop **url.URL) 
 // limit as Go's client.
 const maxRedirects = 10
 
-// probe sends each request in order and stops at the first that fails,
-// because its reason is the one a person needs, and later requests
-// often fail for the same cause.
+// probe sends every request in order, past any that fail, so the
+// reason shows which paths to a site fail and which still work.
 func (p *httpProber) probe(ctx context.Context) probeResult {
+	var failed []string
 	for _, request := range p.requests {
 		if problem := p.send(ctx, request); problem != "" {
-			return probeResult{reason: request.URL + ": " + problem}
+			failed = append(failed, requestLabel(request)+": "+problem)
 		}
 	}
-	return probeResult{passed: true}
+	return resultOf(failed, len(p.requests), "requests")
+}
+
+// requestLabel names a request in a reason: by its name when it has
+// one, and by its URL otherwise.
+func requestLabel(request HTTPRequest) string {
+	if request.Name != "" {
+		return request.Name
+	}
+	return request.URL
 }
 
 // send makes one request and returns what is wrong with the answer, or
@@ -223,22 +232,34 @@ func (p *httpProber) describeError(err error, hop *url.URL) string {
 }
 
 // compare checks the status, then each expected header in name order,
-// then the body, and returns the first problem it finds.
+// then the body, and returns every problem it finds, joined with
+// semicolons. A wrong status with the right body is a different fault
+// from a wrong status with an error page, so one problem does not hide
+// the next.
 func (p *httpProber) compare(resp *http.Response, expect ResponseExpectation) string {
+	var problems []string
 	if len(expect.Status) > 0 && !slices.Contains(expect.Status, int32(resp.StatusCode)) {
-		return fmt.Sprintf("status %d, want %s", resp.StatusCode, eitherStatus(expect.Status))
+		problems = append(problems, fmt.Sprintf("status %d, want %s", resp.StatusCode, eitherStatus(expect.Status)))
 	}
 	for _, name := range slices.Sorted(maps.Keys(expect.Headers)) {
 		want := expect.Headers[name]
 		got := resp.Header.Values(name)
 		if len(got) == 0 {
-			return fmt.Sprintf("header %s is missing, want %q", name, want)
-		}
-		if got[0] != want {
-			return fmt.Sprintf("header %s is %q, want %q", name, got[0], want)
+			problems = append(problems, fmt.Sprintf("header %s is missing, want %q", name, want))
+		} else if got[0] != want {
+			problems = append(problems, fmt.Sprintf("header %s is %q, want %q", name, got[0], want))
 		}
 	}
-	if expect.BodyContains == "" {
+	if problem := p.compareBody(resp, expect.BodyContains); problem != "" {
+		problems = append(problems, problem)
+	}
+	return strings.Join(problems, "; ")
+}
+
+// compareBody returns what is wrong with the body, or an empty string
+// when it contains the text or no text is expected.
+func (p *httpProber) compareBody(resp *http.Response, contains string) string {
+	if contains == "" {
 		return ""
 	}
 	// One byte past the limit tells a body of exactly the limit from a
@@ -247,13 +268,13 @@ func (p *httpProber) compare(resp *http.Response, expect ResponseExpectation) st
 	if err != nil {
 		return p.describeError(fmt.Errorf("reading the body: %w", err), nil)
 	}
-	if bytes.Contains(body[:min(len(body), bodyLimit)], []byte(expect.BodyContains)) {
+	if bytes.Contains(body[:min(len(body), bodyLimit)], []byte(contains)) {
 		return ""
 	}
 	if len(body) > bodyLimit {
-		return fmt.Sprintf("the first 1 MiB of the body does not contain %q", expect.BodyContains)
+		return fmt.Sprintf("the first 1 MiB of the body does not contain %q", contains)
 	}
-	return fmt.Sprintf("body does not contain %q", expect.BodyContains)
+	return fmt.Sprintf("body does not contain %q", contains)
 }
 
 // eitherStatus lists the statuses a request accepts the way a person

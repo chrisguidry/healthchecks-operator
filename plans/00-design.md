@@ -103,7 +103,10 @@ spec:
 #### http
 
 The operator sends each request in order on every interval. The check pings
-success only if every request meets its expectations.
+success only if every request meets its expectations. The operator sends
+every request even after one fails, and checks every expectation of a
+request even after one misses, so the reason tells "only the proxy path
+fails" from "every path fails".
 
 ```yaml
 http:
@@ -141,6 +144,8 @@ http:
 - Go's `net/http` client takes the `Host` header from `Request.Host`, not
   from `Request.Header`. The prober copies a `Host` entry into
   `Request.Host`, so that `Host` is written like any other header.
+- `name` labels a request in a failure reason in place of its URL, for a
+  request whose URL does not say what it probes.
 - The Healthchecks timeout is `interval`.
 - `interval` must be at least `1m`. Healthchecks asks clients not to ping one
   check more than 5 times a minute.
@@ -312,9 +317,12 @@ channels.
 ## Failure reasons
 
 When a probe fails, the ping body is the reason, for example
-`https://proxy.example.net/: status 502, want 200 or 401`. Healthchecks
-keeps the first 100 kB of each ping body and shows it in the check's log.
-The same text is the message of the `Passing` condition.
+`https://proxy.example.net/: status 502, want 200 or 401`. One target that
+misses several expectations lists them all, joined with semicolons. When
+more than one target fails, the reason starts with a count, such as
+`2 of 3 requests failed`, and gives each failed target a line of its own.
+Healthchecks keeps the first 100 kB of each ping body and shows it in the
+check's log. The same text is the message of the `Passing` condition.
 
 ## Restarts and missed runs
 

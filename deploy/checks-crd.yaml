@@ -124,7 +124,7 @@ spec:
                 http:
                   type: object
                   required: [interval, requests]
-                  description: "The operator sends each request in order on every interval. The check pings success only if every request meets its expectations. Requests do not follow redirects, so a redirect is something a request can expect."
+                  description: "The operator sends each request in order on every interval. The check pings success only if every request meets its expectations. The operator sends every request even after one fails, and the failure reason names every request that failed and every expectation it missed. Requests do not follow redirects, so a redirect is something a request can expect."
                   x-kubernetes-validations:
                     - rule: "duration(self.interval) >= duration('1m')"
                       message: "http.interval is at least 1m"
@@ -144,6 +144,11 @@ spec:
                         required: [url]
                         description: "One request the probe sends, and what it expects back."
                         properties:
+                          name:
+                            type: string
+                            minLength: 1
+                            maxLength: 100
+                            description: "A label for the request in a failure reason, in place of its URL. Use it when the URL does not say what the request probes, such as an ingress address with a Host header."
                           url:
                             type: string
                             minLength: 1

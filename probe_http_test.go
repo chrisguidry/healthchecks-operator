@@ -207,6 +207,26 @@ func TestHTTPProbeResults(t *testing.T) {
 				{URL: "{https}/", Expect: ResponseExpectation{Status: []int32{200}}},
 				{URL: "{https}/broken", Expect: ResponseExpectation{Status: []int32{200}}}},
 			"{https}/broken: status 502, want 200"},
+		{"every failed request is reported",
+			[]HTTPRequest{
+				{URL: "{http}/broken", Expect: ResponseExpectation{Status: []int32{200}}},
+				{URL: "{http}/", Expect: ResponseExpectation{Status: []int32{200}}},
+				{URL: "{http}/", Expect: ResponseExpectation{BodyContains: "Goodbye"}}},
+			"2 of 3 requests failed\n" +
+				"{http}/broken: status 502, want 200\n" +
+				`{http}/: body does not contain "Goodbye"`},
+		{"every failed expectation of one request is reported",
+			[]HTTPRequest{{URL: "{http}/moved", Expect: ResponseExpectation{
+				Status:       []int32{200},
+				Headers:      map[string]string{"Location": "https://example.net/", "X-Missing": "yes"},
+				BodyContains: "Welcome"}}},
+			`{http}/moved: status 301, want 200; ` +
+				`header Location is "https://example.com/", want "https://example.net/"; ` +
+				`header X-Missing is missing, want "yes"; ` +
+				`body does not contain "Welcome"`},
+		{"a named request is reported by its name",
+			[]HTTPRequest{{Name: "sign-in page", URL: "{http}/broken", Expect: ResponseExpectation{Status: []int32{200}}}},
+			"sign-in page: status 502, want 200"},
 	}
 	for _, one := range cases {
 		t.Run(one.name, func(t *testing.T) {
@@ -221,7 +241,7 @@ func TestHTTPProbeResults(t *testing.T) {
 	}
 }
 
-func TestHTTPProbeStopsAtTheFirstFailure(t *testing.T) {
+func TestHTTPProbeSendsEveryRequestPastAFailure(t *testing.T) {
 	h := startProbeTargets(t)
 	p, err := newHTTPProberWithRoots(h.probeSpec([]HTTPRequest{
 		{URL: "{http}/broken", Expect: ResponseExpectation{Status: []int32{200}}},
@@ -231,7 +251,7 @@ func TestHTTPProbeStopsAtTheFirstFailure(t *testing.T) {
 
 	p.probe(t.Context())
 
-	mustMatch(t, h.target.requested(), "/broken")
+	mustMatch(t, h.target.requested(), "/broken,/")
 }
 
 func TestHTTPProbeGivesUpOnATargetThatDoesNotAnswer(t *testing.T) {
