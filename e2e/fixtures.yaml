@@ -19,3 +19,21 @@ spec:
   url: http://hc-e2e-healthchecks:8000
   apiKeySecret: {name: e2e-healthchecks, key: api-key}
   channels: [Pushover]
+---
+# assert_hold holds the project's checks while the cluster's one Node
+# is Ready, so the operator reads Nodes too. A hold's RBAC is the
+# installer's to grant, because the base cannot know what a hold names.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: healthchecks-operator-hold}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: healthchecks-operator-hold}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: healthchecks-operator-hold}
+subjects:
+  - {kind: ServiceAccount, name: healthchecks-operator, namespace: healthchecks-operator}

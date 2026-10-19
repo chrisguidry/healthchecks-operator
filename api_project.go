@@ -18,12 +18,41 @@ type ClusterProjectList struct {
 }
 
 // ClusterProjectSpec names the Healthchecks instance, the Secret that
-// holds a read-write API key for the project, and the default
-// integrations for the project's checks.
+// holds a read-write API key for the project, the default integrations
+// for the project's checks, and when to hold the checks.
 type ClusterProjectSpec struct {
 	URL          string       `json:"url"`
 	APIKeySecret SecretKeyRef `json:"apiKeySecret"`
 	Channels     []string     `json:"channels,omitempty"`
+	Hold         *Hold        `json:"hold,omitempty"`
+}
+
+// Hold pauses the project's checks while another object's condition
+// matches, such as a rollout that reboots every node, and resumes them
+// when it stops matching or when MaxDuration passes.
+type Hold struct {
+	While HoldTarget `json:"while"`
+	// MaxDuration is the longest a hold lasts, a Go duration string.
+	MaxDuration string `json:"maxDuration"`
+}
+
+// HoldTarget is one object, named by its resource the way an RBAC rule
+// names it, and the condition on it that holds the checks.
+type HoldTarget struct {
+	APIVersion string `json:"apiVersion"`
+	Resource   string `json:"resource"`
+	// Namespace is empty for a cluster-scoped object.
+	Namespace string        `json:"namespace,omitempty"`
+	Name      string        `json:"name"`
+	Condition HoldCondition `json:"condition"`
+}
+
+// HoldCondition matches one condition in the object's
+// status.conditions. An empty Reason matches any reason.
+type HoldCondition struct {
+	Type   string          `json:"type"`
+	Status ConditionStatus `json:"status"`
+	Reason string          `json:"reason,omitempty"`
 }
 
 // ClusterProjectStatus is the channels the operator resolved for this

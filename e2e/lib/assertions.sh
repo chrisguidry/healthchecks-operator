@@ -333,3 +333,47 @@ assert_no_hot_loop() {
   fi
   log "ok: no line repeats more than 3 times in the operator log"
 }
+
+# assert_hold proves a hold against the real Healthchecks: a check that
+# is up is paused with manual_resume, a failure ping to it is recorded
+# as ignored and changes nothing, a check that is down stays down, and
+# the end of the hold resumes the paused check with a success ping.
+assert_hold() {
+  local node uuid
+  node=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+  log "holding project e2e while node $node is Ready"
+  kubectl patch clusterproject e2e --type merge -p "{\"spec\":{\"hold\":{
+    \"while\":{\"apiVersion\":\"v1\",\"resource\":\"nodes\",\"name\":\"$node\",
+      \"condition\":{\"type\":\"Ready\",\"status\":\"True\"}},
+    \"maxDuration\":\"1h\"}}}" >/dev/null
+
+  retry "ClusterProject e2e is Holding" 60 project_holding_is True
+  retry "example-nightly-export is paused with manual_resume" 60 check_state_is example-nightly-export paused true
+  retry "example-broken-page stays down" 30 check_state_is example-broken-page down true
+
+  uuid=$(check_uuid example-nightly-export)
+  curl -sSf --max-time 10 -X POST "http://127.0.0.1:$HC_PORT/ping/$uuid/fail" >/dev/null
+  retry "the failure ping to example-nightly-export is ignored" 30 latest_ping_is example-nightly-export ign
+  check_state_is example-nightly-export paused true
+  log "ok: a hold pauses an up check, ignores a failure ping to it, and leaves a down check down"
+
+  log "ending the hold"
+  kubectl patch clusterproject e2e --type json -p '[{"op":"remove","path":"/spec/hold"}]' >/dev/null
+  retry "example-nightly-export is up after the hold" 60 check_state_is example-nightly-export up false
+  retry "example-nightly-export's resume ping is a success" 30 latest_ping_is example-nightly-export success
+  log "ok: the end of a hold resumes the check with a success ping"
+}
+
+project_holding_is() {
+  local want=$1 got
+  got=$(kubectl get clusterproject e2e -o jsonpath='{.status.conditions[?(@.type=="Holding")].status}')
+  [ "$got" = "$want" ] || { echo "ClusterProject e2e Holding=[$got], want $want"; return 1; }
+}
+
+check_state_is() {
+  local slug=$1 want_status=$2 want_manual=$3 uuid got
+  uuid=$(check_uuid "$slug")
+  [ -n "$uuid" ] || { echo "no check at slug $slug"; return 1; }
+  got=$(hc_api "/api/v3/checks/$uuid" | jq -r '"\(.status) \(.manual_resume)"')
+  [ "$got" = "$want_status $want_manual" ] || { echo "$slug is [$got], want [$want_status $want_manual]"; return 1; }
+}

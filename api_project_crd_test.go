@@ -68,3 +68,49 @@ func TestClusterProjectCRDValidatesExamples(t *testing.T) {
 		})
 	}
 }
+
+// projectWithHold is a valid project whose hold has one field changed.
+func projectWithHold(change func(hold, while map[string]any)) map[string]any {
+	while := map[string]any{
+		"apiVersion": "example.com/v1",
+		"resource":   "rollouts",
+		"name":       "fleet",
+		"condition":  map[string]any{"type": "Progressing", "status": "True", "reason": "RollingOut"},
+	}
+	hold := map[string]any{"while": while, "maxDuration": "3h"}
+	change(hold, while)
+	spec := clusterProjectSpec()
+	spec["hold"] = hold
+	return clusterProject(spec)
+}
+
+func TestClusterProjectCRDValidatesHolds(t *testing.T) {
+	cases := []struct {
+		name    string
+		object  map[string]any
+		wantErr bool
+	}{
+		{"a hold on a cluster-scoped object", projectWithHold(func(hold, while map[string]any) {}), false},
+		{"a hold on a namespaced object", projectWithHold(func(hold, while map[string]any) { while["namespace"] = "example" }), false},
+		{"a hold on a core object", projectWithHold(func(hold, while map[string]any) { while["apiVersion"] = "v1" }), false},
+		{"a condition with any reason", projectWithHold(func(hold, while map[string]any) {
+			while["condition"] = map[string]any{"type": "Progressing", "status": "True"}
+		}), false},
+		{"no maxDuration", projectWithHold(func(hold, while map[string]any) { delete(hold, "maxDuration") }), true},
+		{"a maxDuration with no unit", projectWithHold(func(hold, while map[string]any) { hold["maxDuration"] = "3" }), true},
+		{"no resource", projectWithHold(func(hold, while map[string]any) { delete(while, "resource") }), true},
+		{"a resource named by its kind", projectWithHold(func(hold, while map[string]any) { while["resource"] = "Rollout" }), true},
+		{"no name", projectWithHold(func(hold, while map[string]any) { delete(while, "name") }), true},
+		{"a status that is not a condition status", projectWithHold(func(hold, while map[string]any) {
+			while["condition"] = map[string]any{"type": "Progressing", "status": "yes"}
+		}), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			errs := validateObject(t, clusterProjectsCRD, c.object)
+			if got := len(errs) > 0; got != c.wantErr {
+				t.Errorf("got errors %v, want an error: %v", errs, c.wantErr)
+			}
+		})
+	}
+}

@@ -66,6 +66,11 @@ type checkState struct {
 	// deleted says the check is gone from Healthchecks, so a retried
 	// finalizer removal does not delete it again.
 	deleted bool
+	// upserted is the check's status that this pass's upsert returned,
+	// or empty when the pass sent no upsert. holdSeen is the start of
+	// the hold that holdCheck last judged the check for.
+	upserted string
+	holdSeen string
 	// backoff spaces out the calls to Healthchecks after one fails.
 	backoff backoff
 }
@@ -204,7 +209,11 @@ func (c *controller) syncCheck(ctx context.Context, check *Check, state *checkSt
 	if !v.ready() {
 		return v
 	}
+	state.upserted = ""
 	if v := c.upsertCheck(ctx, state, check.Spec.ProjectRef.Name, project, request, next); !v.ready() {
+		return v
+	}
+	if v := c.holdCheck(ctx, state, check.Spec.ProjectRef.Name, project, next); !v.ready() {
 		return v
 	}
 	if v := c.syncConfigMap(ctx, check, state, w, next); !v.ready() {
@@ -258,6 +267,7 @@ func (c *controller) upsertCheck(ctx context.Context, state *checkState, name st
 	}
 	state.backoff.succeeded()
 	state.sent, state.via = &request, project.client
+	state.upserted = result.Status
 	next.Project, next.Slug, next.UUID, next.PingURL = name, request.Slug, result.UUID, result.PingURL
 	return synced
 }

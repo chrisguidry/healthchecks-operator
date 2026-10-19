@@ -31,6 +31,9 @@ spec:
         - name: Ready
           type: string
           jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Holding
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Holding")].status
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -83,6 +86,59 @@ spec:
                     type: string
                     minLength: 1
                     maxLength: 100
+                hold:
+                  type: object
+                  required: [while, maxDuration]
+                  description: "Pauses the project's checks while a condition on another object matches, such as a rollout that reboots every node. A paused check alerts on no missed ping, and its pings change nothing. When the condition stops matching, or maxDuration passes, the operator resumes each check with one ping that carries the latest result it holds for the check. A check that is down when the hold starts stays down and is not paused. The operator needs RBAC to get, list, and watch the resource that while names."
+                  properties:
+                    while:
+                      type: object
+                      required: [apiVersion, resource, name, condition]
+                      description: "The object, and the condition in its status.conditions that holds the checks."
+                      properties:
+                        apiVersion:
+                          type: string
+                          minLength: 1
+                          maxLength: 316
+                          pattern: '^([a-z0-9.-]+/)?v[0-9a-z]+$'
+                          description: "The object's group and version, such as apps/v1, or v1 for the core group."
+                        resource:
+                          type: string
+                          minLength: 1
+                          maxLength: 63
+                          pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                          description: "The object's resource, plural and in lowercase, the way an RBAC rule names it, such as deployments."
+                        namespace:
+                          type: string
+                          maxLength: 63
+                          description: "The object's namespace. Absent for a cluster-scoped object."
+                        name:
+                          type: string
+                          minLength: 1
+                          maxLength: 253
+                          description: "The object's name."
+                        condition:
+                          type: object
+                          required: [type, status]
+                          description: "The condition that holds the checks while it matches."
+                          properties:
+                            type:
+                              type: string
+                              minLength: 1
+                              maxLength: 316
+                              description: "The condition's type, such as Progressing."
+                            status:
+                              type: string
+                              enum: ["True", "False", "Unknown"]
+                              description: "The condition's status."
+                            reason:
+                              type: string
+                              maxLength: 1024
+                              description: "The condition's reason. Absent matches any reason."
+                    maxDuration:
+                      type: string
+                      pattern: '^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$'
+                      description: "The longest a hold lasts, a Go duration string such as 3h. When it passes, the operator resumes the checks, and holds them again only after the condition stops matching and matches again."
             status:
               type: object
               description: "The channels the operator resolved for this project, and whether the project is ready. Only the operator writes it."
@@ -103,7 +159,7 @@ spec:
                         description: "The channel's ID on the Healthchecks instance."
                 conditions:
                   type: array
-                  description: "Ready is True once the project's URL and API key work, and every name in spec.channels resolves to a channel."
+                  description: "Ready is True once the project's URL and API key work, and every name in spec.channels resolves to a channel. Holding is True while spec.hold pauses the project's checks, and its lastTransitionTime says when the hold started."
                   x-kubernetes-list-type: map
                   x-kubernetes-list-map-keys: [type]
                   items:

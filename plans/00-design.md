@@ -419,6 +419,43 @@ check's log. The same text is the message of the `Passing` condition.
 - An `http`, `tls`, `tcp`, or `dns` probe that was due while the operator was down runs as
   soon as the operator starts.
 
+## Holds
+
+A `ClusterProject` can name a `hold`: an object, a condition in its
+`status.conditions`, and a `maxDuration`. While the condition matches, the
+operator pauses the project's checks. The use is planned work that fails
+every check for a while, such as a rollout that reboots each node.
+
+- The hold names the object by `apiVersion`, `resource`, `namespace`, and
+  `name`. The resource is the plural an RBAC rule uses, so the operator needs
+  no discovery request, and the installer writes the same word in the RBAC
+  rule that grants the read.
+- The operator watches each resource a hold names, the way it watches its
+  own. The pass that first needs a resource lists it, so that pass reads a
+  full store. A list that fails leaves the hold unread, and the next pass
+  lists again.
+- A hold fails open. An object the operator cannot read or cannot find, a
+  condition that does not match, and a hold past its `maxDuration` all pause
+  nothing. After `maxDuration`, the `Holding` condition says `Expired` until
+  the condition stops matching, so one long match holds once.
+- At the start of a hold, the upsert sends `manual_resume: true`, and its
+  response gives the check's status. The operator pauses each check that is
+  not `down` or `paused`. A down check has notified already, and a person
+  paused the other. `status.heldSince` on the `Check` records the pause,
+  so an operator that restarts during a hold resumes only the checks it
+  paused.
+- With `manual_resume` set, a paused check records each ping as `ign` and
+  keeps its status, a failure included. The probes go on, and their pings
+  change nothing in Healthchecks.
+- At the end, the upsert sends `manual_resume: false`, and then one ping
+  resumes each paused check. The ping is a failure, with the `Passing`
+  condition's message as its body, when the latest probe or run failed, and
+  a success otherwise. The operator does not call the resume endpoint, which
+  makes the check `new`. A new check does not go down until a ping arrives,
+  so a workload that stopped during the hold would never alert.
+- A change from `paused` to `up` notifies no one, and a change to `down`
+  notifies. A pause notifies no one.
+
 ## Operator heartbeat
 
 The operator pings a check of its own every minute. The heartbeat names a
@@ -568,6 +605,12 @@ the message is the text Healthchecks returned.
 
 ## Sources
 
+- Healthchecks pause, resume, and pings, `hc/api/views.py` (`pause`,
+  `resume`, and the `manual_resume` field of `Spec`) and `hc/api/models.py`
+  (`Check.ping`, `Check.get_status`, and `Flip.select_channels`) on `master`
+  at `de5a633`, read 2026-10-19: a paused check with `manual_resume` records
+  each ping as `ign`, the resume endpoint sets the status to `new` and clears
+  `last_ping`, and no flip from `new` or `paused` to `up` notifies.
 - Healthchecks Management API v3, <https://healthchecks.io/docs/api/>, read
   2026-09-27: project-scoped keys, `unique` on create, the read-only
   `GET /api/v3/channels/`, and the fields that read-only keys omit.

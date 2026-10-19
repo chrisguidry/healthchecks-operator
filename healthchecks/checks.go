@@ -53,3 +53,17 @@ func (c *Client) FindBySlug(ctx context.Context, slug string) (*Check, error) {
 	found := out.Checks[0]
 	return &Check{UUID: found.UUID, PingURL: found.PingURL, Slug: found.Slug}, nil
 }
+
+// Pause pauses the check with the given UUID. A paused check sends no
+// alert when its pings stop, and the pause itself notifies no one. A
+// ping resumes the check, unless the check has ManualResume set.
+func (c *Client) Pause(ctx context.Context, uuid string) error {
+	status, data, err := c.request(ctx, http.MethodPost, "/api/v3/checks/"+uuid+"/pause", nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return &APIError{StatusCode: status, Body: string(data)}
+	}
+	return nil
+}

@@ -43,6 +43,10 @@ type projectState struct {
 	// resolved is spec.channels, resolved to IDs.
 	resolved []ResolvedChannel
 	verdict  verdict
+	// holding says spec.hold pauses the project's checks now, and since
+	// is when the hold started, as the Holding condition states it.
+	holding bool
+	since   string
 }
 
 // usable reports whether the project's client works: its key reads and
@@ -55,6 +59,7 @@ func (p *projectState) usable() bool {
 // reconcileProjects reconciles every ClusterProject and forgets the
 // ones that are gone.
 func (c *controller) reconcileProjects(ctx context.Context, projects []ClusterProject) {
+	c.watchTargets(ctx, projects)
 	live := map[string]bool{}
 	for index := range projects {
 		project := &projects[index]
@@ -96,6 +101,7 @@ func (c *controller) reconcileProject(ctx context.Context, project *ClusterProje
 		Channels:   state.resolved,
 		Conditions: withCondition(project.Status.Conditions, projectReady(state.verdict, project.Metadata.Generation, c.now())),
 	}
+	status.Conditions = c.reconcileHold(project, state, status.Conditions)
 	if !reflect.DeepEqual(status, project.Status) {
 		if err := c.client.applyStatus(ctx, clusterProjectsResource, clusterProjectKind, "", name, status, nil); err != nil {
 			c.log.fault("clusterproject "+name, topicStatus, "writing status: "+errorText(err))
@@ -104,6 +110,31 @@ func (c *controller) reconcileProject(ctx context.Context, project *ClusterProje
 		}
 	}
 	c.note("clusterproject "+name, clusterProjectKind, state.verdict)
+}
+
+// reconcileHold judges the project's hold, and returns conditions with
+// the Holding condition it states, or with none for a project that has
+// no hold.
+func (c *controller) reconcileHold(project *ClusterProject, state *projectState, conditions []Condition) []Condition {
+	was := state.holding
+	state.holding, state.since = false, ""
+	if project.Spec.Hold == nil {
+		if was {
+			c.log.printf("clusterproject %s: the hold ended, because the spec no longer states one", project.Metadata.Name)
+		}
+		return withoutCondition(conditions, holdingCondition)
+	}
+	previous, _ := findCondition(conditions, holdingCondition)
+	holding, holds := c.holdingVerdict(project.Spec.Hold, previous, project.Metadata.Generation)
+	conditions = withCondition(conditions, holding)
+	if holds {
+		held, _ := findCondition(conditions, holdingCondition)
+		state.holding, state.since = true, held.LastTransitionTime
+	}
+	if holds != was || holding.Reason != previous.Reason {
+		c.log.printf("clusterproject %s: %s", project.Metadata.Name, holding.Message)
+	}
+	return conditions
 }
 
 // connectProject reads the API key and lists the channels when the

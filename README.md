@@ -378,6 +378,81 @@ The same reason is the message of the `Check`'s `Passing` condition. For a
 `kubectl get checks -A` lists every check with its probe kind and its `Ready`
 and `Passing` state.
 
+## Hold checks during a disruption
+
+Some work fails every check on purpose for a while, such as a rollout that
+reboots each node in turn. A `hold` on a `ClusterProject` pauses the
+project's checks while a condition on another object matches, and resumes
+them when it stops matching:
+
+```yaml
+spec:
+  hold:
+    while:
+      apiVersion: example.com/v1
+      resource: rollouts
+      name: fleet
+      condition: {type: Progressing, status: "True", reason: RollingOut}
+    maxDuration: 3h
+```
+
+`while` names one object by its resource, the way an RBAC rule names it, and
+one condition in its `status.conditions`. An absent `reason` matches any
+reason. A Deployment keeps `Progressing` at `True` after a rollout finishes,
+with the reason `NewReplicaSetAvailable`, so name the reason when the
+condition's status alone does not say the work is under way.
+
+While the hold matches, the operator pauses each check in the project that is
+not already down or paused, and sets `manual_resume` on it. Healthchecks then
+records every ping to the check as ignored, a failure included, and sends no
+alert for a missed ping. The operator's probes go on during the hold. When
+the condition stops matching, the operator clears `manual_resume` and sends
+each paused check one ping with the latest result it holds:
+
+- A check whose latest probe or CronJob run passed gets a success, which
+  resumes it with no notification.
+- A check whose latest probe or run failed gets a failure, which notifies.
+- A `ping` check gets a success, because its workload pings it. Its timer
+  starts again, so a workload that stopped during the hold makes it down at
+  its next deadline.
+
+`maxDuration` is required. When the hold has matched for that long, the
+operator resumes the checks, and the next hold starts only after the
+condition stops matching and matches again. A hold whose object the operator
+cannot read, or that does not exist, pauses nothing. The `Holding` condition
+on the `ClusterProject` says which of these is true, and its
+`lastTransitionTime` says when the hold started.
+
+The operator's ClusterRole does not cover the object a hold names. Grant it
+yourself:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: healthchecks-operator-hold
+rules:
+  - apiGroups: [example.com]
+    resources: [rollouts]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: healthchecks-operator-hold
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: healthchecks-operator-hold
+subjects:
+  - kind: ServiceAccount
+    name: healthchecks-operator
+    namespace: healthchecks-operator
+```
+
+The hold pauses only the checks the operator makes from `Check` resources.
+It does not pause the heartbeat.
+
 ## Heartbeat
 
 When the operator stops, every check it pings goes down one grace period

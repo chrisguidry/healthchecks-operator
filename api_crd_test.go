@@ -145,6 +145,7 @@ func TestThePrinterColumns(t *testing.T) {
 		{clusterProjectsCRD, []column{
 			{"URL", ".spec.url", 0},
 			{"Ready", condition("Ready"), 0},
+			{"Holding", condition("Holding"), 0},
 			{"Age", age, 0},
 			{"Channels", ".spec.channels", 1},
 			{"Reason", conditionReason("Ready"), 1},

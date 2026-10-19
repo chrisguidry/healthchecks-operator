@@ -24,6 +24,9 @@ func (c *controller) upsertRequest(check *Check, project *projectState, w *world
 		Description: check.Spec.Description,
 		Tags:        check.Spec.Tags,
 		Grace:       defaultGrace,
+		// A check the hold paused ignores its pings, a failure included,
+		// until the hold ends. See holdCheck.
+		ManualResume: project.holding,
 	}
 	if check.Spec.Grace != "" {
 		grace, err := time.ParseDuration(check.Spec.Grace)

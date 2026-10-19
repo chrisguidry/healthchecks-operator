@@ -76,6 +76,7 @@ assert_healthchecks_api_state
 assert_triggered_jobs
 assert_workload_pings
 assert_heartbeat
+assert_hold
 assert_restart_catchup
 assert_slug_change_and_delete
 assert_no_hot_loop

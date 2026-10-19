@@ -55,6 +55,10 @@ type UpsertRequest struct {
 	Channels    []string // channel IDs, not names
 	Grace       time.Duration
 	Period      Period
+	// ManualResume keeps a paused check paused until a person or the
+	// API resumes it. Healthchecks then records every ping to the check
+	// as ignored, a failure included, and leaves its status alone.
+	ManualResume bool
 }
 
 // Check identifies one check in Healthchecks.
@@ -64,14 +68,16 @@ type Check struct {
 	Slug    string
 }
 
-// UpsertResult is a Check plus whether Upsert created it.
+// UpsertResult is a Check, whether Upsert created it, and the check's
+// status as Healthchecks reports it: new, up, grace, down, or paused.
 type UpsertResult struct {
 	Check
 	Created bool
+	Status  string
 }
 
 // wireUpsert is the JSON body of a POST to /api/v3/checks/. Grace, Tags,
-// and Channels carry no omitempty: their zero value is a meaningful
+// Channels, and ManualResume carry no omitempty: their zero value is a meaningful
 // request to clear the field, not an absent one. Timeout, Schedule, and
 // TZ do carry it, because whichever half of Period is unset must be
 // absent from the request rather than sent as zero.
@@ -86,6 +92,8 @@ type wireUpsert struct {
 	Schedule string   `json:"schedule,omitempty"`
 	TZ       string   `json:"tz,omitempty"`
 	Unique   []string `json:"unique"`
+
+	ManualResume bool `json:"manual_resume"`
 }
 
 // Upsert creates the check at req.Slug, or updates it if a check with
@@ -112,6 +120,8 @@ func (c *Client) Upsert(ctx context.Context, req UpsertRequest) (*UpsertResult, 
 		Schedule: req.Period.schedule,
 		TZ:       req.Period.tz,
 		Unique:   []string{"slug"},
+
+		ManualResume: req.ManualResume,
 	}
 	body, err := json.Marshal(wire)
 	if err != nil {
@@ -130,6 +140,7 @@ func (c *Client) Upsert(ctx context.Context, req UpsertRequest) (*UpsertResult, 
 		UUID    string `json:"uuid"`
 		PingURL string `json:"ping_url"`
 		Slug    string `json:"slug"`
+		Status  string `json:"status"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("healthchecks: could not parse response: %w", err)
@@ -137,5 +148,6 @@ func (c *Client) Upsert(ctx context.Context, req UpsertRequest) (*UpsertResult, 
 	return &UpsertResult{
 		Check:   Check{UUID: out.UUID, PingURL: out.PingURL, Slug: out.Slug},
 		Created: status == http.StatusCreated,
+		Status:  out.Status,
 	}, nil
 }

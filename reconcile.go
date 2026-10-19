@@ -88,6 +88,12 @@ type controller struct {
 
 	// projects is read and written by the pass only.
 	projects map[string]*projectState
+	// targets watches each resource that a hold names, and targetFaults
+	// holds why a resource could not be listed. The pass alone reads and
+	// writes both, and targetsRunning waits for the watches to stop.
+	targets        map[kubeResource]*targetWatch
+	targetFaults   map[kubeResource]string
+	targetsRunning sync.WaitGroup
 
 	// mutex guards the map of checks, which the probe schedule's
 	// goroutine reads to report each result. Each checkState has its
@@ -109,6 +115,9 @@ func newController(config settings, client *kubeClient, readings *metrics, now f
 		projects:  map[string]*projectState{},
 		checks:    map[string]*checkState{},
 		watches:   map[kubeResource]*collectionWatch{},
+		targets:   map[kubeResource]*targetWatch{},
+
+		targetFaults: map[kubeResource]string{},
 	}
 	for _, resource := range watchedCollections {
 		c.watches[resource] = newCollectionWatch(client, resource, "", selectors[resource], trims[resource], c.wake, readings.watchRestarted(resource.Resource))
@@ -141,6 +150,7 @@ func (c *controller) run(ctx context.Context) error {
 	// them calls an API after it.
 	var running sync.WaitGroup
 	defer running.Wait()
+	defer c.targetsRunning.Wait()
 	c.watch(ctx, &running, versions)
 	running.Go(func() { c.schedule.run(ctx) })
 	if c.heartbeat != nil {
@@ -287,7 +297,7 @@ func (v verdict) ready() bool {
 // remote reports whether the verdict is a failed call to Healthchecks,
 // which puts the object on a backoff.
 func (v verdict) remote() bool {
-	return v.reason == reasonUpsertFailed || v.reason == reasonDeleteFailed || v.reason == reasonHealthchecks
+	return v.reason == reasonUpsertFailed || v.reason == reasonDeleteFailed || v.reason == reasonHealthchecks || v.reason == reasonHoldFailed
 }
 
 // note counts and logs a verdict. The log writes a failure once, and

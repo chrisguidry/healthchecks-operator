@@ -399,6 +399,10 @@ type CheckStatus struct {
 	// ConfigMap is the name of the ConfigMap the operator wrote the ping
 	// URL into, for a ping check. When spec.ping.configMap names another
 	// one, or none, the operator deletes the ConfigMap named here.
-	ConfigMap  string      `json:"configMap,omitempty"`
+	ConfigMap string `json:"configMap,omitempty"`
+	// HeldSince is when the project's hold paused the check. It tells
+	// a check the hold paused from one a person paused, after a
+	// restart too, so the operator resumes only its own.
+	HeldSince  string      `json:"heldSince,omitempty"`
 	Conditions []Condition `json:"conditions,omitempty"`
 }

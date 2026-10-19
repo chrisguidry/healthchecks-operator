@@ -45,6 +45,13 @@ type storedCheck struct {
 	timeout  int
 	schedule string
 	tz       string
+	// status is new, up, down, or paused. The fake has no clock, so a
+	// check goes down only by a failure ping or by SetStatus.
+	status       string
+	manualResume bool
+	// notifications is each status change that notified the check's
+	// channels, oldest first.
+	notifications []string
 }
 
 type storedChannel struct {
@@ -55,7 +62,7 @@ type storedChannel struct {
 
 // Ping is one recorded call to a check's ping URL.
 type Ping struct {
-	Kind string // "success", "start", or "fail"
+	Kind string // "success", "start", "fail", or "ign" for a ping to a check held for a manual resume
 	Body string
 	At   time.Time
 }
@@ -74,6 +81,7 @@ func NewServer(apiKey string) *Server {
 	mux.HandleFunc("POST /api/v3/checks/", s.handleUpsert)
 	mux.HandleFunc("GET /api/v3/checks/", s.handleFindBySlug)
 	mux.HandleFunc("DELETE /api/v3/checks/{uuid}", s.handleDelete)
+	mux.HandleFunc("POST /api/v3/checks/{uuid}/pause", s.handlePause)
 	mux.HandleFunc("GET /api/v3/channels/", s.handleChannels)
 	mux.HandleFunc("/ping/{uuid}", s.handlePing(""))
 	mux.HandleFunc("/ping/{uuid}/start", s.handlePing("start"))
@@ -112,6 +120,26 @@ func (s *Server) Check(slug string) (StoredCheck, bool) {
 	return c.export(s.server.URL), true
 }
 
+// SetStatus sets the status of the check at slug, as time would: a
+// check whose ping is late goes down. It notifies no one.
+func (s *Server) SetStatus(slug, status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checks[slug].status = status
+}
+
+// Notifications reads back each status change that notified the
+// channels of a check's UUID, oldest first.
+func (s *Server) Notifications(uuid string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	check, ok := s.byUUID[uuid]
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), check.notifications...)
+}
+
 // Pings reads back every ping recorded for a check's UUID, oldest first.
 func (s *Server) Pings(uuid string) []Ping {
 	s.mu.Lock()
@@ -133,6 +161,9 @@ type StoredCheck struct {
 	Schedule    string
 	Timezone    string
 	PingURL     string
+	Status      string
+	// ManualResume keeps a paused check paused through its pings.
+	ManualResume bool
 }
 
 func (c *storedCheck) export(baseURL string) StoredCheck {
@@ -148,6 +179,9 @@ func (c *storedCheck) export(baseURL string) StoredCheck {
 		Schedule:    c.schedule,
 		Timezone:    c.tz,
 		PingURL:     baseURL + "/ping/" + c.uuid,
+		Status:      c.status,
+
+		ManualResume: c.manualResume,
 	}
 }
 
@@ -186,6 +220,8 @@ func (s *Server) handleUpsert(w http.ResponseWriter, r *http.Request) {
 		Schedule string   `json:"schedule"`
 		TZ       string   `json:"tz"`
 		Unique   []string `json:"unique"`
+		// An absent manual_resume leaves the check's own alone.
+		ManualResume *bool `json:"manual_resume"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "could not parse request body")
@@ -202,7 +238,10 @@ func (s *Server) handleUpsert(w http.ResponseWriter, r *http.Request) {
 
 	created := check == nil
 	if created {
-		check = &storedCheck{uuid: newUUID()}
+		check = &storedCheck{uuid: newUUID(), status: "new"}
+	}
+	if body.ManualResume != nil {
+		check.manualResume = *body.ManualResume
 	}
 
 	check.name = body.Name
@@ -273,6 +312,26 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.dict(check))
 }
 
+// handlePause implements POST /api/v3/checks/<uuid>/pause, as
+// hc.api.views.pause does: the check's status becomes paused, and the
+// pause notifies no one.
+func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(w, r) {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	check, ok := s.byUUID[r.PathValue("uuid")]
+	if !ok {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	check.status = "paused"
+	writeJSON(w, http.StatusOK, s.dict(check))
+}
+
 // handleChannels implements GET /api/v3/channels/.
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(w, r) {
@@ -297,10 +356,10 @@ func (s *Server) handlePing(kind string) http.HandlerFunc {
 		uuid := r.PathValue("uuid")
 
 		s.mu.Lock()
-		_, known := s.byUUID[uuid]
+		check, known := s.byUUID[uuid]
 		if known {
 			body := readAndCapBody(r)
-			s.pings[uuid] = append(s.pings[uuid], Ping{Kind: pingKindName(kind), Body: body, At: time.Now()})
+			s.pings[uuid] = append(s.pings[uuid], Ping{Kind: check.ping(pingKindName(kind)), Body: body, At: time.Now()})
 		}
 		s.mu.Unlock()
 
@@ -310,6 +369,28 @@ func (s *Server) handlePing(kind string) http.HandlerFunc {
 		}
 		fmt.Fprint(w, "OK")
 	}
+}
+
+// ping moves the check's status for one ping of kind, and returns the
+// kind the ping is recorded as. It follows hc.api.models.Check.ping: a
+// paused check with manual_resume set ignores the ping, a start leaves
+// the status alone, a success makes the check up, and a failure makes
+// it down. hc.api.models.Flip.select_channels decides which change
+// notifies: every change to down, and a change to up from any status
+// but new and paused.
+func (c *storedCheck) ping(kind string) string {
+	if c.status == "paused" && c.manualResume {
+		return "ign"
+	}
+	next := map[string]string{"success": "up", "fail": "down"}[kind]
+	if next == "" || next == c.status {
+		return kind
+	}
+	if next == "down" || (c.status != "new" && c.status != "paused") {
+		c.notifications = append(c.notifications, next)
+	}
+	c.status = next
+	return kind
 }
 
 func pingKindName(suffix string) string {
@@ -329,6 +410,9 @@ func (s *Server) dict(c *storedCheck) map[string]any {
 		"uuid":     c.uuid,
 		"ping_url": s.server.URL + "/ping/" + c.uuid,
 		"channels": c.channels,
+		"status":   c.status,
+
+		"manual_resume": c.manualResume,
 	}
 	if c.schedule != "" {
 		result["schedule"] = c.schedule

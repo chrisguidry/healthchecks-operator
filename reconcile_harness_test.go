@@ -134,7 +134,9 @@ func startHarness(t *testing.T) *harness {
 // memory.
 func (h *harness) restart(config settings) *controller {
 	h.log = &syncBuffer{}
-	return newController(config, h.api.client, newMetrics("dev"), h.clock.now, h.log)
+	c := newController(config, h.api.client, newMetrics("dev"), h.clock.now, h.log)
+	h.t.Cleanup(c.targetsRunning.Wait)
+	return c
 }
 
 // refuse answers every management API request of method from now on
@@ -169,11 +171,16 @@ func (h *harness) watch() {
 	h.t.Cleanup(running.Wait)
 }
 
-// synced reports whether every store holds each object at the version
-// the fake API server holds.
+// synced reports whether every store, a hold's included, holds each
+// object at the version the fake API server holds.
 func (h *harness) synced() bool {
 	for resource, watch := range h.c.watches {
 		if !maps.Equal(storedVersions(h.t, watch.store), h.api.versions(resource, watch.selector)) {
+			return false
+		}
+	}
+	for resource, target := range h.c.targets {
+		if !maps.Equal(storedVersions(h.t, target.watch.store), h.api.versions(resource, "")) {
 			return false
 		}
 	}

@@ -437,6 +437,10 @@ spec:
                 configMap:
                   type: string
                   description: "The name of the ConfigMap the operator wrote the ping URL into, for a ping check. When spec.ping.configMap names another ConfigMap, or none, the operator deletes this one."
+                heldSince:
+                  type: string
+                  format: date-time
+                  description: "When the hold of the Check's ClusterProject paused the check. The operator resumes the check when the hold ends, and clears this field. Absent while no hold pauses the check."
                 conditions:
                   type: array
                   description: "Ready is True once the check exists in Healthchecks and matches the spec. Passing holds the result of the last probe: True when it passed, and False with the failure reason as the message when it failed. Its lastTransitionTime is when the result changed. For a cronJob check, Passing holds the last run the operator reported, and is absent until the first run finishes. Passing is absent for a ping check, because the operator does not see its pings, and until the first probe runs."
