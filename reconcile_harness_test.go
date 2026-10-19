@@ -82,6 +82,9 @@ type harness struct {
 	// refusal, when set, is the method and the body of a 400 that the
 	// proxy answers every request of that method with.
 	refusal atomic.Pointer[[2]string]
+	// refusedSuffix, when set, makes the proxy answer every request
+	// whose path ends with it with a 400.
+	refusedSuffix atomic.Pointer[string]
 }
 
 // startHarness seeds the project "internal" with its API key and a
@@ -110,6 +113,11 @@ func startHarness(t *testing.T) *harness {
 		if refusal := h.refusal.Load(); refusal != nil && r.Method == refusal[0] {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(refusal[1]))
+			return
+		}
+		if suffix := h.refusedSuffix.Load(); suffix != nil && strings.HasSuffix(r.URL.Path, *suffix) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error": "refused by the test"}`))
 			return
 		}
 		forward.ServeHTTP(w, r)

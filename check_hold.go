@@ -60,6 +60,9 @@ func (c *controller) pauseCheck(ctx context.Context, state *checkState, name str
 		return synced
 	}
 	if err := project.client.Pause(ctx, next.UUID); err != nil {
+		// The next pass sends the upsert again, because its response
+		// is the check's status, which the pause needs.
+		state.sent = nil
 		return verdict{reasonHoldFailed, "pausing the check for the hold: " + errorText(err)}
 	}
 	c.log.printf("%s: paused check %s in Healthchecks, because ClusterProject %s holds its checks", state.subject(), next.Slug, name)

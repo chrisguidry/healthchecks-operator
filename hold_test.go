@@ -253,6 +253,67 @@ func TestRemovingTheHoldResumesTheChecks(t *testing.T) {
 	mustMatch(t, len(h.c.targets), 0)
 }
 
+// A pause that fails sets Ready to False, and a pass after the backoff
+// pauses the check.
+func TestAHoldPausesACheckAgainAfterAFailedPause(t *testing.T) {
+	h := startHarness(t)
+	h.upCheck()
+	h.holdWhileRollingOut("3h")
+	h.startRollout()
+	pause := "/pause"
+	h.refusedSuffix.Store(&pause)
+
+	h.pass()
+
+	mustMatch(t, conditionOf(h.check("example", "website"), "Ready").Reason, "HoldFailed")
+	h.refusedSuffix.Store(nil)
+	h.clock.advance(time.Minute)
+	h.pass()
+	stored, _ := h.hc.Check("example-website")
+	mustMatch(t, stored.Status, "paused")
+	mustMatch(t, conditionOf(h.check("example", "website"), "Ready").Reason, "Synced")
+}
+
+func TestAHoldSaysWhyItHoldsNothing(t *testing.T) {
+	cases := []struct {
+		name    string
+		change  func(hold, while map[string]any)
+		reason  string
+		message string
+	}{
+		{
+			"a namespaced object that does not exist",
+			func(hold, while map[string]any) {
+				while["apiVersion"], while["resource"], while["namespace"] = "v1", "configmaps", "example"
+			},
+			"TargetNotFound",
+			"configmaps example/fleet does not exist",
+		},
+		{
+			"a maxDuration that does not parse",
+			func(hold, while map[string]any) { hold["maxDuration"] = "soon" },
+			"InvalidHold",
+			`maxDuration: time: invalid duration "soon"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startHarness(t)
+			h.startRollout()
+			h.holdWhileRollingOut("3h")
+			h.api.update(clusterProjectsResource, "", "internal", func(object map[string]any) {
+				hold := object["spec"].(map[string]any)["hold"].(map[string]any)
+				tc.change(hold, hold["while"].(map[string]any))
+			})
+
+			h.pass()
+
+			mustMatch(t, h.holding().Reason, tc.reason)
+			mustMatch(t, h.holding().Message, tc.message)
+		})
+	}
+}
+
 // A refused list, such as one that RBAC stops, holds nothing, and the
 // next pass lists again.
 func TestAHoldThatCannotListItsObjectHoldsNothing(t *testing.T) {

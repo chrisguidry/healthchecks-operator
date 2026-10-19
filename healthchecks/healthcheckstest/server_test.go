@@ -210,3 +210,21 @@ func TestAnUpdateSetsManualResume(t *testing.T) {
 		t.Error("ManualResume = true after an update that cleared it")
 	}
 }
+
+func TestPausingWithTheWrongKeyIsUnauthorized(t *testing.T) {
+	server := healthcheckstest.NewServer("the-key")
+	t.Cleanup(server.Close)
+	upsert(t, server, "website", false)
+	check, _ := server.Check("website")
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL()+"/api/v3/checks/"+check.UUID+"/pause", nil)
+	req.Header.Set("X-Api-Key", "the-wrong-key")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST pause: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
