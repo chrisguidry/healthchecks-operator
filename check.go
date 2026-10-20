@@ -71,6 +71,10 @@ type checkState struct {
 	// the hold that holdCheck last judged the check for.
 	upserted string
 	holdSeen string
+	// resumeAfter is when a pass found the hold over a probe check that
+	// it paused, or zero. A probe run that started before it does not
+	// resume the check.
+	resumeAfter time.Time
 	// backoff spaces out the calls to Healthchecks after one fails.
 	backoff backoff
 }
@@ -213,7 +217,7 @@ func (c *controller) syncCheck(ctx context.Context, check *Check, state *checkSt
 	if v := c.upsertCheck(ctx, state, check.Spec.ProjectRef.Name, project, request, next); !v.ready() {
 		return v
 	}
-	if v := c.holdCheck(ctx, state, check.Spec.ProjectRef.Name, project, next); !v.ready() {
+	if v := c.holdCheck(ctx, state, check.Spec.ProbeKind(), check.Spec.ProjectRef.Name, project, next); !v.ready() {
 		return v
 	}
 	if v := c.syncConfigMap(ctx, check, state, w, next); !v.ready() {

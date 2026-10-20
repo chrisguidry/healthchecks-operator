@@ -406,12 +406,15 @@ While the hold matches, the operator pauses each check in the project that is
 not already down or paused, and sets `manual_resume` on it. Healthchecks then
 records every ping to the check as ignored, a failure included, and sends no
 alert for a missed ping. The operator's probes go on during the hold. When
-the condition stops matching, the operator clears `manual_resume` and sends
-each paused check one ping with the latest result it holds:
+the condition stops matching, the operator clears `manual_resume` and resumes
+each paused check with a ping. A success resumes the check with no
+notification, and a failure makes it down, which notifies.
 
-- A check whose latest probe or CronJob run passed gets a success, which
-  resumes it with no notification.
-- A check whose latest probe or run failed gets a failure, which notifies.
+- An `http`, `tls`, `tcp`, or `dns` check runs its probe at once, and the
+  first result from a probe that started after the hold resumes it. A probe
+  from inside the hold does not count, because it often ran while the thing
+  it watches was still coming back.
+- A `cronJob` check gets its latest Job's result.
 - A `ping` check gets a success, because its workload pings it. Its timer
   starts again, so a workload that stopped during the hold makes it down at
   its next deadline.

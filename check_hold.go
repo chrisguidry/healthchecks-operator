@@ -4,18 +4,26 @@ package main
 // when the hold ends. The pause is Healthchecks' own: a paused check
 // alerts on no missed ping, and with manual_resume set it records each
 // ping as ignored and keeps its status, a failure included
-// (hc.api.models.Check.ping). The operator's probes go on during the
-// hold, so the operator holds each check's latest result when it ends.
+// (hc.api.models.Check.ping).
 //
-// The hold ends with one ping, not with the resume endpoint. A resume
+// The hold ends with a ping, not with the resume endpoint. A resume
 // makes the check new, and a new check never goes down until a ping
 // arrives (hc.api.views.resume), so a workload that stopped during the
-// hold would never alert. The ping carries the latest result: a
-// success resumes the check with no notification, and a failure makes
-// it down, which notifies (hc.api.models.Flip.select_channels).
+// hold would never alert. A success resumes the check with no
+// notification, and a failure makes it down, which notifies
+// (hc.api.models.Flip.select_channels).
+//
+// A probe check resumes with its next probe, which the end of the hold
+// makes due at once. Its latest result is from inside the hold, often
+// from the hold's last minutes, when the thing it watches is still
+// coming back. Sent as the resume, that failure would make the check
+// down, and the next probe would make it up seconds later, with an
+// alert for each. A cronJob check resumes
+// with its latest Job's result, and a ping check with a success.
 
 import (
 	"context"
+	"time"
 
 	"github.com/chrisguidry/healthchecks-operator/healthchecks"
 )
@@ -28,11 +36,16 @@ const reasonHoldFailed = "HoldFailed"
 // resumes it when the hold ends. The pass's upsert has already sent
 // manual_resume to match the hold, so a pause holds through every
 // ping, and the resume's ping counts.
-func (c *controller) holdCheck(ctx context.Context, state *checkState, name string, project *projectState, next *CheckStatus) verdict {
+func (c *controller) holdCheck(ctx context.Context, state *checkState, probeKind ProbeKind, name string, project *projectState, next *CheckStatus) verdict {
 	if project.holding {
+		state.resumeAfter = time.Time{}
 		return c.pauseCheck(ctx, state, name, project, next)
 	}
 	if next.HeldSince == "" {
+		return synced
+	}
+	if probeKind.timed() {
+		c.awaitProbe(state)
 		return synced
 	}
 	kind, body := healthchecks.PingSuccess, "the hold on ClusterProject "+name+" ended"
@@ -46,6 +59,18 @@ func (c *controller) holdCheck(ctx context.Context, state *checkState, name stri
 	c.log.printf("%s: resumed check %s in Healthchecks, because the hold ended", state.subject(), next.Slug)
 	next.HeldSince = ""
 	return synced
+}
+
+// awaitProbe makes the check's probe due at once, the first time a pass
+// finds its hold ended. report resumes the check with the first result
+// from a run that started after this. A probe that is not registered
+// yet is due at once when the pass registers it.
+func (c *controller) awaitProbe(state *checkState) {
+	if !state.resumeAfter.IsZero() {
+		return
+	}
+	state.resumeAfter = c.now()
+	c.schedule.expedite(state.namespace + "/" + state.name)
 }
 
 // pauseCheck pauses the check once for each hold. A check that is down

@@ -89,7 +89,7 @@ spec:
                 hold:
                   type: object
                   required: [while, maxDuration]
-                  description: "Pauses the project's checks while a condition on another object matches, such as a rollout that reboots every node. A paused check alerts on no missed ping, and its pings change nothing. When the condition stops matching, or maxDuration passes, the operator resumes each check with one ping that carries the latest result it holds for the check. A check that is down when the hold starts stays down and is not paused. The operator needs RBAC to get, list, and watch the resource that while names."
+                  description: "Pauses the project's checks while a condition on another object matches, such as a rollout that reboots every node. A paused check alerts on no missed ping, and its pings change nothing. When the condition stops matching, or maxDuration passes, the operator resumes each check with one ping. An http, tls, tcp, or dns check runs its probe at once and resumes with the first result from after the hold. A cronJob check resumes with its latest Job's result, and a ping check with a success. A check that is down when the hold starts stays down and is not paused. The operator needs RBAC to get, list, and watch the resource that while names."
                   properties:
                     while:
                       type: object

@@ -104,8 +104,10 @@ func (c *controller) stopProbe(state *checkState) {
 // report pings the check with one probe's result, and records the
 // result in the Passing condition. A failure's reason is the ping body
 // and the condition's message. A result that matches the one before
-// writes nothing.
-func (c *controller) report(ctx context.Context, key string, result probeResult) {
+// writes nothing. After a hold, the first ping from a run that started
+// after the hold resumes the check, and a run that started before it
+// reports nothing.
+func (c *controller) report(ctx context.Context, key string, started time.Time, result probeResult) {
 	state := c.lookupCheck(key)
 	if state == nil {
 		return
@@ -115,6 +117,10 @@ func (c *controller) report(ctx context.Context, key string, result probeResult)
 	// A run that started before its Check went, or before it became a
 	// cronJob check, finishes with no probe to report for.
 	if state.probe == "" || state.status.PingURL == "" {
+		return
+	}
+	resuming := !state.resumeAfter.IsZero()
+	if resuming && started.Before(state.resumeAfter) {
 		return
 	}
 	kind, label := healthchecks.PingSuccess, pingSuccess
@@ -130,6 +136,10 @@ func (c *controller) report(ctx context.Context, key string, result probeResult)
 	}
 
 	next := state.status
+	if resuming && err == nil {
+		c.log.printf("%s: resumed check %s in Healthchecks, because the hold ended", state.subject(), next.Slug)
+		next.HeldSince, state.resumeAfter = "", time.Time{}
+	}
 	next.Conditions = withCondition(next.Conditions, probePassing(result, state.generation, c.now()))
 	c.writeCheckStatus(ctx, state, next)
 }

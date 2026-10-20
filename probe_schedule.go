@@ -8,13 +8,13 @@ import (
 )
 
 // probeSchedule runs every registered prober at its interval from one
-// timer in one goroutine, and hands each result to report. A cluster
-// with a thousand Checks has one timer and a heap of a thousand
-// entries, and it has a goroutine for a probe only while that probe
-// runs.
+// timer in one goroutine, and hands each result to report with the time
+// its run started. A cluster with a thousand Checks has one timer and a
+// heap of a thousand entries, and it has a goroutine for a probe only
+// while that probe runs.
 type probeSchedule struct {
 	now    func() time.Time
-	report func(ctx context.Context, key string, result probeResult)
+	report func(ctx context.Context, key string, started time.Time, result probeResult)
 	// timerAt returns a channel that receives once the clock reaches
 	// deadline. It is a field so a test replaces the timer along with
 	// the clock.
@@ -40,6 +40,10 @@ type scheduleEntry struct {
 	// index is the entry's place in the queue, or -1 while it runs.
 	index   int
 	running bool
+	// expedited marks a running entry whose key was expedited. Its run
+	// started too early to count, so the entry is due at once when the
+	// run finishes.
+	expedited bool
 	// removed marks a running entry whose key was removed. The loop
 	// drops its result and deletes it when the run finishes.
 	removed bool
@@ -60,7 +64,7 @@ type finishedRun struct {
 // newProbeSchedule builds a schedule. now is the clock. report is
 // called from the schedule's goroutine with the key a prober was
 // registered under.
-func newProbeSchedule(now func() time.Time, report func(ctx context.Context, key string, result probeResult)) *probeSchedule {
+func newProbeSchedule(now func() time.Time, report func(ctx context.Context, key string, started time.Time, result probeResult)) *probeSchedule {
 	s := &probeSchedule{
 		now:      now,
 		report:   report,
@@ -114,6 +118,24 @@ func (s *probeSchedule) set(key string, interval time.Duration, p prober) {
 	}
 }
 
+// expedite makes key due at once. A key that is running is due at once
+// when its run finishes. A key that is not registered is a no-op.
+func (s *probeSchedule) expedite(key string) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	entry, exists := s.entries[key]
+	if !exists || entry.removed {
+		return
+	}
+	if entry.running {
+		entry.expedited = true
+		return
+	}
+	entry.due = s.now()
+	heap.Fix(&s.queue, entry.index)
+	s.poke()
+}
+
 // remove stops probing key. A key that is not registered is a no-op.
 func (s *probeSchedule) remove(key string) {
 	s.mutex.Lock()
@@ -152,7 +174,7 @@ func (s *probeSchedule) run(ctx context.Context) {
 		case <-timer:
 		case run := <-s.finished:
 			if s.finish(run) {
-				s.report(ctx, run.entry.key, run.result)
+				s.report(ctx, run.entry.key, run.started, run.result)
 			}
 		}
 	}
@@ -184,7 +206,8 @@ func (s *probeSchedule) probe(ctx context.Context, entry *scheduleEntry, p probe
 }
 
 // finish puts a run's entry back in the queue, due one interval after
-// the run started, so a slow target does not push later runs back.
+// the run started, so a slow target does not push later runs back, or
+// due at once when the key was expedited during the run.
 // It reports whether the result belongs to a key that is still set.
 func (s *probeSchedule) finish(run finishedRun) bool {
 	s.mutex.Lock()
@@ -198,6 +221,10 @@ func (s *probeSchedule) finish(run finishedRun) bool {
 	current := run.generation == entry.generation
 	if current {
 		entry.due = run.started.Add(entry.interval)
+	}
+	if entry.expedited {
+		entry.expedited = false
+		entry.due = s.now()
 	}
 	heap.Push(&s.queue, entry)
 	return current

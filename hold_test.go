@@ -2,9 +2,13 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/chrisguidry/healthchecks-operator/healthchecks/healthcheckstest"
 )
 
 // rolloutsResource is the object a hold watches in these tests: one
@@ -95,46 +99,118 @@ func TestAHoldPausesEachCheckWhileTheConditionMatches(t *testing.T) {
 	mustMatch(t, h.holding().LastTransitionTime, "2026-09-27T12:00:00Z")
 }
 
+// switchSite serves one page that answers with the status the test
+// stores in it.
+func switchSite(t *testing.T, status int) (string, *atomic.Int32) {
+	t.Helper()
+	answer := &atomic.Int32{}
+	answer.Store(int32(status))
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(int(answer.Load()))
+	}))
+	t.Cleanup(site.Close)
+	return site.URL + "/", answer
+}
+
+// stalledSite answers its first request with a 502 only when the test
+// releases it, and every later request with a 200. arrived receives
+// once the first request is in flight.
+func stalledSite(t *testing.T) (url string, arrived <-chan struct{}, release chan<- struct{}) {
+	t.Helper()
+	in, out := make(chan struct{}, 1), make(chan struct{})
+	var requests atomic.Int32
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) > 1 {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		in <- struct{}{}
+		<-out
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(site.Close)
+	return site.URL + "/", in, out
+}
+
+// resumed waits until the check in Healthchecks has status, and
+// returns it.
+func (h *harness) resumed(slug, status string) healthcheckstest.StoredCheck {
+	h.t.Helper()
+	eventually(h.t, "check "+slug+" to be "+status, func() bool {
+		stored, _ := h.hc.Check(slug)
+		return stored.Status == status
+	})
+	stored, _ := h.hc.Check(slug)
+	return stored
+}
+
 // The probe goes on during a hold, and Healthchecks ignores its pings.
-// When the hold ends, one ping carries the latest result: a probe that
-// passed resumes the check with no notification, and a probe that
-// failed makes it down, which notifies.
-func TestAHoldResumesEachCheckWithItsLatestResult(t *testing.T) {
+// When the hold ends, the probe runs again at once, and its ping
+// resumes the check: a pass resumes it with no notification, and a
+// failure makes it down, which notifies. A failure from inside the
+// hold does not count, because the hold exists to ignore those.
+func TestAHoldResumesEachCheckWithAProbeFromAfterTheHold(t *testing.T) {
 	cases := []struct {
 		name          string
-		site          int
+		after         int
 		status        string
 		notifications int
 		pingKind      string
 	}{
-		{"a passing probe", http.StatusOK, "up", 0, "success"},
-		{"a failing probe", http.StatusBadGateway, "down", 1, "fail"},
+		{"a target that recovered", http.StatusOK, "up", 0, "success"},
+		{"a target that is still failing", http.StatusBadGateway, "down", 1, "fail"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := startHarness(t)
 			h.holdWhileRollingOut("3h")
 			h.startRollout()
-			h.api.create(checksResource, httpCheck("example", "website", startSite(t, tc.site)))
+			url, site := switchSite(t, http.StatusBadGateway)
+			h.api.create(checksResource, httpCheck("example", "website", url))
 			h.runProbes()
 			h.pass()
 			check := h.probedCheck("example", "website")
 			held, _ := h.hc.Check("example-website")
 			mustMatch(t, held.Status, "paused")
 
+			site.Store(int32(tc.after))
 			h.finishRollout()
 			h.pass()
 
-			stored, _ := h.hc.Check("example-website")
-			mustMatch(t, stored.Status, tc.status)
+			stored := h.resumed("example-website", tc.status)
 			mustMatch(t, stored.ManualResume, false)
 			mustMatch(t, len(h.hc.Notifications(stored.UUID)), tc.notifications)
 			pings := h.hc.Pings(check.Status.UUID)
 			mustMatch(t, pings[0].Kind, "ign")
 			mustMatch(t, pings[len(pings)-1].Kind, tc.pingKind)
 			mustMatch(t, h.holding().Reason, "NotMatched")
+			eventually(t, "the hold to leave status", func() bool {
+				return h.check("example", "website").Status.HeldSince == ""
+			})
 		})
 	}
+}
+
+// A probe that started inside the hold and finishes after it reports
+// nothing. The probe runs again, and its result resumes the check.
+func TestAHoldDropsAProbeThatStartedBeforeItEnded(t *testing.T) {
+	h := startHarness(t)
+	h.holdWhileRollingOut("3h")
+	h.startRollout()
+	url, arrived, release := stalledSite(t)
+	h.api.create(checksResource, httpCheck("example", "website", url))
+	h.runProbes()
+	h.pass()
+	receive(t, arrived)
+
+	h.clock.advance(time.Minute)
+	h.finishRollout()
+	h.pass()
+	release <- struct{}{}
+
+	stored := h.resumed("example-website", "up")
+	mustMatch(t, len(h.hc.Notifications(stored.UUID)), 0)
+	mustMatch(t, h.pingKinds(stored.UUID), "success")
 }
 
 // A check that is down when the hold starts has already notified, so
@@ -189,8 +265,7 @@ func TestAHoldEndsAtItsMaxDuration(t *testing.T) {
 	h.pass()
 	h.pass()
 
-	stored, _ := h.hc.Check("example-website")
-	mustMatch(t, stored.Status, "up")
+	h.resumed("example-website", "up")
 	mustMatch(t, h.holding().Status, ConditionFalse)
 	mustMatch(t, h.holding().Reason, "Expired")
 }
@@ -226,12 +301,14 @@ func TestARestartedOperatorResumesTheChecksItHeld(t *testing.T) {
 	h.pass()
 
 	h.c = h.restart(settings{namespace: operatorNamespace})
+	h.runProbes()
 	h.finishRollout()
 	h.pass()
 
-	stored, _ := h.hc.Check("example-website")
-	mustMatch(t, stored.Status, "up")
-	mustMatch(t, h.check("example", "website").Status.HeldSince, "")
+	h.resumed("example-website", "up")
+	eventually(t, "the hold to leave status", func() bool {
+		return h.check("example", "website").Status.HeldSince == ""
+	})
 }
 
 func TestRemovingTheHoldResumesTheChecks(t *testing.T) {
@@ -246,8 +323,7 @@ func TestRemovingTheHoldResumesTheChecks(t *testing.T) {
 	})
 	h.pass()
 
-	stored, _ := h.hc.Check("example-website")
-	mustMatch(t, stored.Status, "up")
+	h.resumed("example-website", "up")
 	_, found := findCondition(h.project("internal").Status.Conditions, holdingCondition)
 	mustMatch(t, found, false)
 	mustMatch(t, len(h.c.targets), 0)

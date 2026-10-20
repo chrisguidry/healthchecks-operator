@@ -106,7 +106,7 @@ var scheduleStart = time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
 func startSchedule(t *testing.T) *scheduleHarness {
 	t.Helper()
 	h := &scheduleHarness{clock: &scheduleClock{current: scheduleStart}, reports: make(chan scheduleReport)}
-	h.schedule = newProbeSchedule(h.clock.now, func(ctx context.Context, key string, result probeResult) {
+	h.schedule = newProbeSchedule(h.clock.now, func(ctx context.Context, key string, _ time.Time, result probeResult) {
 		select {
 		case h.reports <- scheduleReport{key, result}:
 		case <-ctx.Done():
@@ -261,6 +261,40 @@ func TestScheduleStopsProbingARemovedKey(t *testing.T) {
 	mustBeIdle(t, removed)
 }
 
+// A hold that ends makes its checks' probes due at once, so each check
+// resumes with a result from after the hold.
+func TestScheduleProbesAnExpeditedKeyAtOnce(t *testing.T) {
+	h := startSchedule(t)
+	p := h.prober()
+	h.schedule.set("example/website", time.Hour, p)
+	runOnce(t, p, passed)
+	receive(t, h.reports)
+	h.clock.advance(time.Minute)
+
+	h.schedule.expedite("example/website")
+	h.schedule.expedite("example/never-set")
+
+	mustMatch(t, runOnce(t, p, failed), scheduleStart.Add(time.Minute))
+	mustMatch(t, receive(t, h.reports), scheduleReport{"example/website", failed})
+}
+
+// A run that was in flight when its key was expedited started too
+// early to count, so the key runs again as soon as that run finishes.
+func TestScheduleProbesAKeyExpeditedDuringARunWhenTheRunFinishes(t *testing.T) {
+	h := startSchedule(t)
+	p := h.prober()
+	h.schedule.set("example/website", time.Hour, p)
+	call := receive(t, p.calls)
+	h.clock.advance(time.Minute)
+
+	h.schedule.expedite("example/website")
+	call.reply <- failed
+	receive(t, h.reports)
+
+	mustMatch(t, runOnce(t, p, passed), scheduleStart.Add(time.Minute))
+	mustMatch(t, receive(t, h.reports), scheduleReport{"example/website", passed})
+}
+
 // A key removed during a run and set again is a new key. The old run's
 // result belongs to the removed key, so only the new prober's result
 // is reported.
@@ -299,7 +333,7 @@ func (passingProber) probe(context.Context) probeResult { return passed }
 
 func TestScheduleRunsOnTheRealClock(t *testing.T) {
 	reports := make(chan string)
-	schedule := newProbeSchedule(time.Now, func(ctx context.Context, key string, _ probeResult) {
+	schedule := newProbeSchedule(time.Now, func(ctx context.Context, key string, _ time.Time, _ probeResult) {
 		select {
 		case reports <- key:
 		case <-ctx.Done():
