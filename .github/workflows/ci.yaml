@@ -25,7 +25,7 @@ jobs:
 
       # setup-go keeps the module downloads and the build cache between
       # runs, keyed on go.sum, so a run compiles only what changed.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
