@@ -46,7 +46,9 @@ func TestAPassingProbePingsSuccess(t *testing.T) {
 	mustMatch(t, h.pingKinds(check.Status.UUID), "success")
 }
 
-func TestAFailingProbePingsFailWithTheReason(t *testing.T) {
+// A Check's first result fails it at once, because Healthchecks does
+// not time a check that has never had a success.
+func TestAFirstProbeThatFailsPingsFailWithTheReason(t *testing.T) {
 	h := startHarness(t)
 	url := startSite(t, http.StatusBadGateway)
 	h.api.create(checksResource, httpCheck("example", "website", url))
@@ -60,6 +62,30 @@ func TestAFailingProbePingsFailWithTheReason(t *testing.T) {
 	mustMatch(t, passing.Reason, "ProbeFailed")
 	mustMatch(t, strings.HasPrefix(passing.Message, url), true)
 	mustMatch(t, h.pingKinds(check.Status.UUID), "fail: "+passing.Message)
+}
+
+// A failure after a pass logs its reason and leaves the check up. The
+// check goes down only when no success arrives within its timeout and
+// grace, so a failure that the next probe recovers from never notifies.
+func TestAFailureAfterAPassLogsTheReasonAndLeavesTheCheckUp(t *testing.T) {
+	h := startHarness(t)
+	url, site := switchSite(t, http.StatusOK)
+	h.api.create(checksResource, httpCheck("example", "website", url))
+	h.runProbes()
+	h.pass()
+	check := h.probedCheck("example", "website")
+
+	site.Store(http.StatusBadGateway)
+	h.c.schedule.expedite("example/website")
+	eventually(t, "the failure in status", func() bool {
+		return conditionOf(h.check("example", "website"), "Passing").Status == ConditionFalse
+	})
+
+	reason := conditionOf(h.check("example", "website"), "Passing").Message
+	stored, _ := h.hc.Check("example-website")
+	mustMatch(t, h.pingKinds(check.Status.UUID), "success, log: "+reason)
+	mustMatch(t, stored.Status, "up")
+	mustMatch(t, len(h.hc.Notifications(stored.UUID)), 0)
 }
 
 // The probe schedule's report writes status beside the pass, and each

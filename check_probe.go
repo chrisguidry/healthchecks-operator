@@ -125,7 +125,7 @@ func (c *controller) report(ctx context.Context, key string, started time.Time, 
 	}
 	kind, label := healthchecks.PingSuccess, pingSuccess
 	if !result.passed {
-		kind, label = healthchecks.PingFail, pingFail
+		kind, label = failureKind(state, resuming)
 	}
 	err := healthchecks.Ping(ctx, c.http, state.status.PingURL, kind, result.reason)
 	c.readings.observePing(label, err)
@@ -142,6 +142,23 @@ func (c *controller) report(ctx context.Context, key string, started time.Time, 
 	}
 	next.Conditions = withCondition(next.Conditions, probePassing(result, state.generation, c.now()))
 	c.writeCheckStatus(ctx, state, next)
+}
+
+// failureKind chooses the ping for a failed probe. A failure after an
+// earlier result logs its reason and leaves the check's status alone,
+// so the check goes down only when no success arrives within its
+// timeout and grace, and a brief failure that the next probe recovers
+// from never notifies. Two cases ping fail instead. A Check's first
+// result fails the check, because Healthchecks does not time a check
+// that has never had a success. And the ping that ends a hold fails
+// the check, because a paused check resumes only on a success or a
+// failure, and a log would leave it paused.
+func failureKind(state *checkState, resuming bool) (healthchecks.PingKind, string) {
+	_, earlier := findCondition(state.status.Conditions, passingCondition)
+	if !earlier || resuming {
+		return healthchecks.PingFail, pingFail
+	}
+	return healthchecks.PingLog, pingLog
 }
 
 func probePassing(result probeResult, generation int64, now time.Time) Condition {

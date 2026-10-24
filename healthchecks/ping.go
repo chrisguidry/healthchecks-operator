@@ -28,6 +28,9 @@ const (
 	// PingFail reports that a check's job finished but something it
 	// checked did not pass.
 	PingFail
+	// PingLog records its body in the check's log and leaves the
+	// check's status as it is.
+	PingLog
 )
 
 func (k PingKind) suffix() string {
@@ -36,13 +39,15 @@ func (k PingKind) suffix() string {
 		return "/start"
 	case PingFail:
 		return "/fail"
+	case PingLog:
+		return "/log"
 	default:
 		return ""
 	}
 }
 
 // Ping sends one signal to a check's ping URL: a Check's ping_url for
-// PingSuccess, or that URL plus "/start" or "/fail". Pinging needs no
+// PingSuccess, or that URL plus "/start", "/fail", or "/log". Pinging needs no
 // API key; the URL itself, minted when the check was created, is the
 // credential. body is optional and is sent as text/plain, cut to 100 kB.
 //

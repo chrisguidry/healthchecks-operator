@@ -62,7 +62,7 @@ type storedChannel struct {
 
 // Ping is one recorded call to a check's ping URL.
 type Ping struct {
-	Kind string // "success", "start", "fail", or "ign" for a ping to a check held for a manual resume
+	Kind string // "success", "start", "fail", "log", or "ign" for a ping to a check held for a manual resume
 	Body string
 	At   time.Time
 }
@@ -86,6 +86,7 @@ func NewServer(apiKey string) *Server {
 	mux.HandleFunc("/ping/{uuid}", s.handlePing(""))
 	mux.HandleFunc("/ping/{uuid}/start", s.handlePing("start"))
 	mux.HandleFunc("/ping/{uuid}/fail", s.handlePing("fail"))
+	mux.HandleFunc("/ping/{uuid}/log", s.handlePing("log"))
 	s.server = httptest.NewServer(mux)
 
 	return s
@@ -348,8 +349,8 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"channels": channels})
 }
 
-// handlePing implements a check's ping_url and its "/start" and "/fail"
-// suffixes. Pinging carries no API key: the UUID in the URL is the
+// handlePing implements a check's ping_url and its "/start", "/fail",
+// and "/log" suffixes. Pinging carries no API key: the UUID in the URL is the
 // credential, the same as the real hc-ping.com.
 func (s *Server) handlePing(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -375,7 +376,8 @@ func (s *Server) handlePing(kind string) http.HandlerFunc {
 // kind the ping is recorded as. It follows hc.api.models.Check.ping: a
 // paused check with manual_resume set ignores the ping, a start leaves
 // the status alone, a success makes the check up, and a failure makes
-// it down. hc.api.models.Flip.select_channels decides which change
+// it down. A log, like a start, leaves the status alone.
+// hc.api.models.Flip.select_channels decides which change
 // notifies: every change to down, and a change to up from any status
 // but new and paused.
 func (c *storedCheck) ping(kind string) string {

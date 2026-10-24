@@ -351,8 +351,25 @@ removed {
 
 ### When a probe fails
 
-The operator sends the reason as the body of the failure ping, and
-Healthchecks shows it in the check's log:
+A failed probe does not take the check down at once. The operator sends
+the reason to the check's `/log` endpoint, which records it in the
+check's log and leaves the check's status alone. The check goes down
+only when no probe passes within its interval plus its `grace`, so a
+brief failure that the next probe recovers from never notifies. Set
+`grace` to how long a failure may last before you want to hear about
+it.
+
+Two failures go to `/fail` instead, and take the check down at once:
+
+- A Check's first result. Healthchecks does not time a check that has
+  never had a success, so a log would leave a new check that fails from
+  the start in its `new` state for good.
+- The first result after a hold (see "Hold checks during a
+  disruption"). A paused check resumes only on a success or a failure,
+  so a log would leave it paused.
+
+In both cases, the reason is the ping's body. Healthchecks shows it in
+the check's log:
 
 ```
 https://proxy.example.net/: status 502, want 200

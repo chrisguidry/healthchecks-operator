@@ -29,6 +29,7 @@ const (
 	pingSuccess = "success"
 	pingStart   = "start"
 	pingFail    = "fail"
+	pingLog     = "log"
 )
 
 // The resources the operator watches, by the name that labels their
@@ -111,7 +112,7 @@ func newMetrics(version string) *metrics {
 		m.probes.WithLabelValues(probe, "pass")
 		m.probes.WithLabelValues(probe, "fail")
 	}
-	for _, ping := range []string{pingSuccess, pingStart, pingFail} {
+	for _, ping := range []string{pingSuccess, pingStart, pingFail, pingLog} {
 		m.pings.WithLabelValues(ping, "ok")
 		m.pings.WithLabelValues(ping, "error")
 	}

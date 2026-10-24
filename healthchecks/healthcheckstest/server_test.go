@@ -161,6 +161,8 @@ func TestAPingMovesTheStatusAndNotifies(t *testing.T) {
 		{"a success on a paused check held for a manual resume", true, true, "", "paused", nil},
 		{"a failure on a paused check held for a manual resume", true, true, "fail", "paused", nil},
 		{"a failure on a check that is not paused", true, false, "fail", "down", []string{"down"}},
+		{"a log on a new check", false, false, "log", "new", nil},
+		{"a log on a paused check", false, true, "log", "paused", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

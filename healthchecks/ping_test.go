@@ -21,6 +21,7 @@ func TestPingSuffixesForEachKind(t *testing.T) {
 		{healthchecks.PingSuccess, "/check-uuid"},
 		{healthchecks.PingStart, "/check-uuid/start"},
 		{healthchecks.PingFail, "/check-uuid/fail"},
+		{healthchecks.PingLog, "/check-uuid/log"},
 	}
 
 	for _, c := range cases {
