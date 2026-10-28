@@ -266,12 +266,59 @@ assert_restart_catchup() {
   kubectl -n "$CHECK_NS" create job "$job_name" --from=cronjob/backup >/dev/null
   kubectl -n "$CHECK_NS" wait --for=condition=Complete "job/$job_name" --timeout=60s >/dev/null
 
-  log "scaling the operator back to 1"
-  kubectl -n healthchecks-operator scale deployment/healthchecks-operator --replicas=1 >/dev/null
+  log "scaling the operator back to 2"
+  kubectl -n healthchecks-operator scale deployment/healthchecks-operator --replicas=2 >/dev/null
   kubectl -n healthchecks-operator rollout status deployment/healthchecks-operator --timeout=90s >/dev/null
 
   retry "example-backup reports $job_name after the restart" 90 pings_advanced_past example-backup "$before"
   log "ok: a Job that finished while the operator was down is still reported once it restarts"
+}
+
+# assert_failover proves the standby takes over: the leader pod is
+# deleted, it releases the Lease as it stops, the other pod takes the
+# Lease, and the heartbeat keeps getting pings from the new leader. The
+# old leader releases the Lease only after its work stops, so every
+# ping counted after the handover is the new leader's. The new leader
+# first pings a minute after it starts to lead.
+assert_failover() {
+  local leader before
+  retry "one operator pod holds the Lease" 60 lease_has_holder
+  leader=$(lease_holder_pod)
+
+  log "deleting the leader, pod $leader"
+  kubectl -n healthchecks-operator delete pod "$leader" --wait=false >/dev/null
+  retry "a pod other than $leader holds the Lease" 30 lease_held_by_other_than "$leader"
+  before=$(heartbeat_pings)
+  retry "operator-heartbeat gets a ping from the new leader" 120 heartbeat_pings_past "$before"
+  log "ok: the standby took the Lease from $leader and kept the heartbeat going"
+}
+
+# lease_holder_pod is the pod named in the Lease. A holder identity is
+# the pod's hostname, which is its name, and a random suffix.
+lease_holder_pod() {
+  local holder
+  holder=$(kubectl -n healthchecks-operator get lease healthchecks-operator -o jsonpath='{.spec.holderIdentity}')
+  echo "${holder%_*}"
+}
+
+lease_has_holder() {
+  [ -n "$(lease_holder_pod)" ] || { echo "the Lease has no holder"; return 1; }
+}
+
+lease_held_by_other_than() {
+  local holder
+  holder=$(lease_holder_pod)
+  [ -n "$holder" ] && [ "$holder" != "$1" ] || { echo "the Lease holder is '$holder'"; return 1; }
+}
+
+heartbeat_pings() {
+  hc_api "/api/v3/checks/?slug=operator-heartbeat" | jq -r '.checks[0].n_pings // 0'
+}
+
+heartbeat_pings_past() {
+  local n
+  n=$(heartbeat_pings)
+  [ "$n" -gt "$1" ] || { echo "operator-heartbeat n_pings=$n, want more than $1"; return 1; }
 }
 
 pings_advanced_past() {

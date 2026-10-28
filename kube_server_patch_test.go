@@ -1,6 +1,6 @@
 package main
 
-// The writes that fakeKube accepts: a merge patch on an object,
+// The writes that fakeKube accepts: create, a merge patch on an object,
 // server-side apply on an object or on its status, and delete.
 
 import (
@@ -10,6 +10,34 @@ import (
 	"slices"
 	"time"
 )
+
+// serveCreate stores the object in the body under the name in its
+// metadata, in the collection of the path.
+func (f *fakeKube) serveCreate(w http.ResponseWriter, collection fakeKey, body []byte) {
+	var object map[string]any
+	if err := json.Unmarshal(body, &object); err != nil {
+		writeKubeStatus(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	meta := metadataOf(object)
+	key := fakeKey{collection.resource, collection.namespace, stringAt(meta, "name")}
+	meta["namespace"] = key.namespace
+	if key.namespace == "" {
+		delete(meta, "namespace")
+	}
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	if _, exists := f.objects[key]; exists {
+		writeKubeStatus(w, http.StatusConflict, key.name+" already exists")
+		return
+	}
+	f.version++
+	meta["uid"] = fmt.Sprintf("uid-%d", f.version)
+	meta["generation"] = 1
+	meta["creationTimestamp"] = f.now().UTC().Format(time.RFC3339)
+	f.record(key, "ADDED", object, nil)
+	writeKubeJSON(w, f.objects[key])
+}
 
 func (f *fakeKube) servePatch(w http.ResponseWriter, r *http.Request, key fakeKey, status bool, body []byte) {
 	var patch map[string]any

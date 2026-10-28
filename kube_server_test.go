@@ -2,8 +2,8 @@ package main
 
 // fakeKube is a Kubernetes API server for tests. It holds objects of
 // any resource in memory and answers the requests that kubeClient
-// makes: get, list and watch with a label selector, a merge patch with
-// a resourceVersion precondition, server-side apply on an object or on
+// makes: get, list and watch with a label selector, create, a merge
+// patch with a resourceVersion precondition, server-side apply on an object or on
 // its status subresource, and delete. A test seeds objects, runs the
 // code under test against fakeKube's client, and reads back what the
 // code wrote.
@@ -13,6 +13,7 @@ package main
 //   - Every change moves one resourceVersion counter, and a change
 //     that writes the same content moves nothing.
 //   - A change outside metadata and status increments the generation.
+//   - A create of a name that exists gets 409.
 //   - A merge patch that states an old resourceVersion gets 409.
 //   - An apply removes a status field that its field manager applied
 //     before and no longer states.
@@ -254,6 +255,8 @@ func (f *fakeKube) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.serveWatch(w, r, key, parseSelector(r.URL.Query().Get("labelSelector")))
 	case r.Method == http.MethodGet && key.name == "":
 		f.serveList(w, key, parseSelector(r.URL.Query().Get("labelSelector")))
+	case r.Method == http.MethodPost && key.name == "" && !status:
+		f.serveCreate(w, key, body)
 	case r.Method == http.MethodDelete && !status:
 		f.serveDelete(w, key, body)
 	case r.Method == http.MethodGet && !status:

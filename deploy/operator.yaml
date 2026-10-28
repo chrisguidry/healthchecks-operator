@@ -1,10 +1,15 @@
-# The operator: one Deployment with one replica. There is no leader
-# election, so two pods must never run at once, or a check would get two
-# pings for one probe. strategy: Recreate stops the old pod before the
-# new one starts.
+# The operator: one Deployment with two replicas. One replica leads and
+# does the work, and the other waits as a standby. The leader holds a
+# Lease in this namespace. When the leader stops, it releases the Lease
+# and the standby takes over within a retry period of two seconds. When
+# the leader's node fails, the standby takes over once the Lease has
+# gone fifteen seconds without a renewal.
+#
+# The anti-affinity places the replicas on different nodes when the
+# cluster has more than one, so one node failure cannot stop both.
 #
 # The pod keeps no state. It reads everything from the API server and
-# from Healthchecks when it starts.
+# from Healthchecks when it starts to lead.
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -16,9 +21,7 @@ kind: Deployment
 metadata:
   name: healthchecks-operator
 spec:
-  replicas: 1
-  strategy:
-    type: Recreate
+  replicas: 2
   selector:
     matchLabels:
       app: healthchecks-operator
@@ -28,6 +31,15 @@ spec:
         app: healthchecks-operator
     spec:
       serviceAccountName: healthchecks-operator
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: healthchecks-operator
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

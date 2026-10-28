@@ -524,8 +524,47 @@ The operator follows the patterns of the liken-sh operators
   probe is an entry at its next due time. There is no goroutine and no
   requeue for each `Check`.
 - In steady state, the only outbound traffic is probes and pings.
-- One replica, `strategy: Recreate`, no leader election. Two pods never run
-  at the same time, so no check gets two pings for one probe.
+- Two replicas, with leader election. See "Leader election".
+
+### Leader election
+
+- The Deployment runs two replicas, placed on different nodes when the
+  cluster has more than one. One replica, the leader, runs the reconcile
+  loop, the probes, and the heartbeat. The other waits as a standby, with
+  no watches open.
+- The leader holds the `coordination.k8s.io/v1` Lease
+  `healthchecks-operator` in the operator's namespace, and renews it every
+  2 seconds. The holder's identity is the pod's hostname and a random
+  suffix, so a container that restarts in the same pod is a new
+  candidate.
+- A standby tries for the Lease every 2 seconds. It takes the Lease when
+  the holder is empty, or when the Lease has not changed for 15 seconds
+  by the standby's own clock, counted from when it first read the Lease
+  as it is. A clock that disagrees with the leader's cannot make a Lease
+  look expired early. Every write states the `resourceVersion` it read,
+  so of two standbys that try at once, one gets `409 Conflict`.
+- A leader that cannot renew for 10 seconds, or that reads another
+  holder in the Lease, stops its work and waits as a standby. When it
+  leads again, it runs a new controller, so nothing from its last term's
+  memory carries over. It does not exit, because the kubelet counts each
+  exit as a crash and delays the restarts. A renewal counts from when its
+  attempt started, and a standby counts from when its read returned, so a
+  slow API server never shrinks the margin: 10 seconds is shorter than
+  15, and the leader stops before a standby can take the Lease.
+- A leader that gets SIGTERM stops its work, then clears the holder with
+  a patch at the version it last wrote, so a standby takes over on its
+  next try instead of 15 seconds later. A rollout or a drain moves the
+  work in about 2 seconds.
+- A new leader starts the way a restarted operator starts. Everything
+  it needs is in `status` and in Healthchecks: see "Restarts and missed
+  runs".
+- A Lease is not a lock. A leader that the scheduler pauses past its
+  renew deadline, or a probe in flight when the work stops, can send a
+  ping beside the new leader's. A duplicate success, `/log`, or `/start`
+  ping changes nothing in Healthchecks. A `cronJob` check's report of one
+  Job can reach Healthchecks twice, when the new leader reads the Check
+  before the old leader's write of `lastReportedJob` lands.
+- `healthchecks_leader` is 1 on the leader and 0 on a standby.
 
 ### RBAC
 
@@ -536,6 +575,8 @@ The operator follows the patterns of the liken-sh operators
   name when it needs one, and it does not list or watch Secrets, so it does
   not keep every Secret in memory. A changed Secret takes effect on the next
   probe.
+- `leases`: get, create, and patch, in a Role in the operator's
+  namespace.
 - `configmaps`: list, watch, create, patch, and delete, in all namespaces.
   patch is the server-side apply of a `ping` check's ConfigMap, and the API
   server authorizes an apply to a ConfigMap that does not exist as create.
@@ -626,6 +667,16 @@ the message is the text Healthchecks returned.
 - cert-manager cluster resource namespace,
   <https://cert-manager.io/docs/configuration/#cluster-resource-namespace>:
   the rule for where a cluster-scoped issuer reads its Secrets.
+- client-go leader election, `tools/leaderelection/leaderelection.go` on
+  `master`, <https://github.com/kubernetes/client-go/blob/master/tools/leaderelection/leaderelection.go>,
+  read 2026-10-28: a lease duration of 15 seconds, a renew deadline of 10, and a
+  retry period of 2; expiry measured from when the candidate observed the
+  record, not from `renewTime`; and a release that clears the holder.
+- Lease, `coordination.k8s.io/v1`,
+  <https://kubernetes.io/docs/reference/kubernetes-api/cluster-resources/lease-v1/>,
+  read 2026-10-28: `holderIdentity`, `leaseDurationSeconds`, `acquireTime`,
+  `renewTime`, and `leaseTransitions`. A MicroTime is RFC 3339 with six
+  digits of fraction, `RFC3339Micro` in `k8s.io/apimachinery/pkg/apis/meta/v1`.
 - cronsim, <https://github.com/cuu508/cronsim>, `main` on 2026-09-27, and
   the `check_schedule` validator in Healthchecks' `hc/api/views.py`: tested
   by hand, cronsim rejects `@daily`, `@hourly`, `@weekly`, `@monthly`,

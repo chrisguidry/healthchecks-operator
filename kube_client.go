@@ -280,11 +280,33 @@ func (c *kubeClient) watch(ctx context.Context, resource kubeResource, namespace
 	return c.send(ctx, http.MethodGet, resource.path(namespace, "")+"?"+query.Encode(), "", nil)
 }
 
+// create creates an object. An object of the same name that already
+// exists is errConflict. out receives the created object, and may be
+// nil.
+func (c *kubeClient) create(ctx context.Context, resource kubeResource, namespace string, object, out any) error {
+	body, err := json.Marshal(object)
+	if err != nil {
+		return err
+	}
+	return c.request(ctx, http.MethodPost, resource.path(namespace, ""), jsonContentType, body, out)
+}
+
+// mergePatch changes an object with a JSON merge patch. A patch that
+// states metadata.resourceVersion is refused with errConflict if the
+// object changed since the caller read that version. out receives the
+// patched object, and may be nil.
+func (c *kubeClient) mergePatch(ctx context.Context, resource kubeResource, namespace, name string, patch, out any) error {
+	body, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	return c.request(ctx, http.MethodPatch, resource.path(namespace, name), mergePatchContentType, body, out)
+}
+
 // setFinalizers replaces an object's finalizers with a merge patch that
-// states the resourceVersion the caller read. The API server refuses
-// the patch with errConflict if the object changed since then, so a
-// finalizer never comes off an object whose newer version the caller
-// has not seen. out receives the patched object, and may be nil.
+// states the resourceVersion the caller read, so a finalizer never
+// comes off an object whose newer version the caller has not seen. out
+// receives the patched object, and may be nil.
 func (c *kubeClient) setFinalizers(ctx context.Context, resource kubeResource, namespace, name, resourceVersion string, finalizers []string, out any) error {
 	if finalizers == nil {
 		finalizers = []string{}
@@ -293,13 +315,9 @@ func (c *kubeClient) setFinalizers(ctx context.Context, resource kubeResource, n
 		ResourceVersion string   `json:"resourceVersion"`
 		Finalizers      []string `json:"finalizers"`
 	}
-	body, err := json.Marshal(struct {
+	return c.mergePatch(ctx, resource, namespace, name, struct {
 		Metadata meta `json:"metadata"`
-	}{meta{resourceVersion, finalizers}})
-	if err != nil {
-		return err
-	}
-	return c.request(ctx, http.MethodPatch, resource.path(namespace, name), mergePatchContentType, body, out)
+	}{meta{resourceVersion, finalizers}}, out)
 }
 
 // apply writes an object with server-side apply, and creates it when

@@ -8,12 +8,11 @@
 
 OPERATOR_LOG_TAIL_LINES=2000
 
-# operator_log prints what the current operator pod has logged, oldest
-# kept line first. A Deployment's pod is gone once
-# assert_restart_catchup replaces it, so this sees only the current
-# pod's own history, never what an earlier pod logged before it.
+# operator_log prints what each operator pod has logged, oldest kept
+# line first, with each line prefixed by its pod. A pod that is gone,
+# such as the one assert_restart_catchup replaces, is not in it.
 operator_log() {
-  kubectl -n healthchecks-operator logs deploy/healthchecks-operator \
+  kubectl -n healthchecks-operator logs -l app=healthchecks-operator --prefix \
     --tail="$OPERATOR_LOG_TAIL_LINES" 2>&1 || true
 }
 
@@ -27,5 +26,5 @@ print_diagnostics() {
   kubectl get clusterprojects -o wide >&2 2>&1 || true
   kubectl -n "$CHECK_NS" get checks -o wide >&2 2>&1 || true
   kubectl -n "$CHECK_NS" get jobs,cronjobs >&2 2>&1 || true
-  kubectl -n healthchecks-operator get deployments,pods >&2 2>&1 || true
+  kubectl -n healthchecks-operator get deployments,pods,leases >&2 2>&1 || true
 }

@@ -488,6 +488,22 @@ reconcile loop runs. Put it in a project on a different Healthchecks
 instance, so it still alerts when the cluster that runs your Healthchecks is
 down.
 
+## Replicas and failover
+
+The Deployment runs two replicas, on different nodes when the cluster has
+more than one. One leads and does the work, and the other waits. They
+elect the leader through the Lease `healthchecks-operator` in the
+operator's namespace:
+
+```sh
+kubectl -n healthchecks-operator get lease healthchecks-operator
+```
+
+When the leader stops for a rollout or a drain, the standby takes over in
+about two seconds. When the leader's node fails, the standby takes over
+about fifteen seconds later. The `healthchecks_leader` metric is 1 on the
+leader. Each pod's log says when it waits, leads, or loses the Lease.
+
 ## Development
 
 `make test` runs every check CI runs: gofmt, vet, the race detector, and the

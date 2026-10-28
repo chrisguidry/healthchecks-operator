@@ -151,6 +151,9 @@ func TestOperateRunsUntilItsContextEnds(t *testing.T) {
 	err := operate(ctx, settings{namespace: operatorNamespace}, api.client, newMetrics("dev"))
 
 	mustSucceed(t, err)
+	var lease Lease
+	mustMatch(t, api.read(leasesResource, operatorNamespace, leaseName, &lease), true)
+	mustMatch(t, lease.Spec.HolderIdentity, "")
 }
 
 func TestAPassRecordsItsMetrics(t *testing.T) {

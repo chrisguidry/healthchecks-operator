@@ -45,6 +45,7 @@ type metrics struct {
 	probeDuration   *prometheus.HistogramVec
 	probes          *prometheus.CounterVec
 	pings           *prometheus.CounterVec
+	leader          prometheus.Gauge
 }
 
 func newMetrics(version string) *metrics {
@@ -79,6 +80,10 @@ func newMetrics(version string) *metrics {
 			Name: metricsPrefix + "pings_total",
 			Help: "Pings sent to Healthchecks, by ping and by whether Healthchecks accepted it.",
 		}, []string{"ping", "outcome"}),
+		leader: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: metricsPrefix + "leader",
+			Help: "1 while this replica holds the Lease and does the work, and 0 while it waits as a standby.",
+		}),
 	}
 
 	// build_info always holds 1, and its label is the release. This is
@@ -94,7 +99,7 @@ func newMetrics(version string) *metrics {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		buildInfo,
 		m.passDuration, m.reconcileErrors, m.watchRestarts,
-		m.probeDuration, m.probes, m.pings,
+		m.probeDuration, m.probes, m.pings, m.leader,
 	)
 
 	// Every series starts at zero on the first scrape. Prometheus
@@ -146,6 +151,14 @@ func (m *metrics) observeProbe(probe string, passed bool, took time.Duration) {
 // observePing counts one ping, and whether Healthchecks accepted it.
 func (m *metrics) observePing(ping string, err error) {
 	m.pings.WithLabelValues(ping, outcomeLabel(err == nil, "ok", "error")).Inc()
+}
+
+func (m *metrics) setLeader(leading bool) {
+	if leading {
+		m.leader.Set(1)
+	} else {
+		m.leader.Set(0)
+	}
 }
 
 func outcomeLabel(good bool, yes, no string) string {

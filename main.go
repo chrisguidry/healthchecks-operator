@@ -87,8 +87,10 @@ func run() error {
 	return operate(ctx, config, client, readings)
 }
 
-// operate starts the reconcile loop and the heartbeat, and returns when
-// ctx ends.
+// operate runs the reconcile loop and the heartbeat while this replica
+// leads, with a new controller for each term, until ctx ends.
 func operate(ctx context.Context, config settings, client *kubeClient, readings *metrics) error {
-	return newController(config, client, readings, time.Now, os.Stderr).run(ctx)
+	return newElection(client, config.namespace, candidateIdentity(), readings, os.Stderr).serve(ctx, func(ctx context.Context) error {
+		return newController(config, client, readings, time.Now, os.Stderr).run(ctx)
+	})
 }

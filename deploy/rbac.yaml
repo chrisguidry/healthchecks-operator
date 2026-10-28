@@ -1,5 +1,6 @@
 # The operator's permissions. A ClusterProject is cluster-scoped, and a
-# Check can be in any namespace, so this is a ClusterRole.
+# Check can be in any namespace, so these are in a ClusterRole. The
+# Lease for leader election is in a Role in the operator's namespace.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -49,6 +50,30 @@ roleRef:
 # The subject states no namespace. kustomize fills in the namespace of
 # the kustomization that takes this base, so the binding follows the
 # ServiceAccount when that kustomization sets its own namespace.
+subjects:
+  - kind: ServiceAccount
+    name: healthchecks-operator
+---
+# The replicas elect a leader through one Lease in the operator's own
+# namespace. The first replica creates it, and the leader renews and
+# releases it with a merge patch.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: healthchecks-operator
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: healthchecks-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: healthchecks-operator
 subjects:
   - kind: ServiceAccount
     name: healthchecks-operator

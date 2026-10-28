@@ -78,6 +78,7 @@ assert_workload_pings
 assert_heartbeat
 assert_hold
 assert_restart_catchup
+assert_failover
 assert_slug_change_and_delete
 assert_no_hot_loop
 
