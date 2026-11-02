@@ -16,17 +16,24 @@ import (
 const defaultGrace = time.Hour
 
 // upsertRequest builds the request for a Check, or the verdict that
-// says why it cannot.
-func (c *controller) upsertRequest(check *Check, project *projectState, w *world) (healthchecks.UpsertRequest, verdict) {
+// says why it cannot. held says the project's hold paused the check.
+func (c *controller) upsertRequest(check *Check, project *projectState, w *world, held bool) (healthchecks.UpsertRequest, verdict) {
 	request := healthchecks.UpsertRequest{
 		Name:        check.EffectiveDisplayName(),
 		Slug:        check.EffectiveSlug(),
 		Description: check.Spec.Description,
 		Tags:        check.Spec.Tags,
 		Grace:       defaultGrace,
+	}
+	if held {
 		// A check the hold paused ignores its pings, a failure included,
-		// until the hold ends. See holdCheck.
-		ManualResume: project.holding,
+		// until the hold ends, and then takes them again so the resume's
+		// ping counts. Every other check keeps the setting a person gave
+		// it. See holdCheck. The request takes a copy, because the
+		// operator keeps the request it sent and compares the next one
+		// with it, and a pointer to project.holding would change with it.
+		ignore := project.holding
+		request.ManualResume = &ignore
 	}
 	if check.Spec.Grace != "" {
 		grace, err := time.ParseDuration(check.Spec.Grace)

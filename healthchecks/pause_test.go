@@ -16,7 +16,7 @@ func upsertWebsite(t *testing.T, client *healthchecks.Client, manualResume bool)
 		Slug:         "website",
 		Grace:        time.Minute,
 		Period:       healthchecks.FixedTimeout(time.Hour),
-		ManualResume: manualResume,
+		ManualResume: &manualResume,
 	})
 	if err != nil {
 		t.Fatalf("Upsert: %v", err)
@@ -25,12 +25,15 @@ func upsertWebsite(t *testing.T, client *healthchecks.Client, manualResume bool)
 }
 
 func TestUpsertSendsManualResume(t *testing.T) {
+	set, cleared := true, false
 	cases := []struct {
 		name         string
-		manualResume bool
+		manualResume *bool
+		want         any
 	}{
-		{"set", true},
-		{"cleared", false},
+		{"set", &set, true},
+		{"cleared", &cleared, false},
+		{"left alone", nil, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,8 +42,8 @@ func TestUpsertSendsManualResume(t *testing.T) {
 				Period:       healthchecks.FixedTimeout(time.Hour),
 				ManualResume: tc.manualResume,
 			})
-			if sent["manual_resume"] != tc.manualResume {
-				t.Errorf("manual_resume = %v, want %v", sent["manual_resume"], tc.manualResume)
+			if sent["manual_resume"] != tc.want {
+				t.Errorf("manual_resume = %v, want %v", sent["manual_resume"], tc.want)
 			}
 		})
 	}

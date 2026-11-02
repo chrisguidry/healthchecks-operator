@@ -417,13 +417,20 @@ with the reason `NewReplicaSetAvailable`, so name the reason when the
 condition's status alone does not say the work is under way.
 
 While the hold matches, the operator pauses each check in the project that is
-not already down or paused, and sets `manual_resume` on it. Healthchecks then
-records every ping to the check as ignored, a failure included, and sends no
-alert for a missed ping. The operator's probes go on during the hold. When
+not already down or paused, and sets `manual_resume` on it first. Healthchecks
+then records every ping to the check as ignored, a failure included, and sends
+no alert for a missed ping. The operator's probes go on during the hold. When
 the condition stops matching, the operator clears `manual_resume` and resumes
 each paused check with a ping, after the wait that the first item below
-describes for a probe check. A success resumes the check with no
-notification, and a failure makes it down, which notifies.
+describes for a probe check. A success resumes the check with no notification,
+and a failure makes it down, which notifies.
+
+`manual_resume` is the setting "Ignore the ping, stay in the paused state" in
+a check's filtering rules in Healthchecks. The operator leaves it alone on
+every check a hold does not pause, so a check you pause by hand with that
+setting stays paused through probes and holds until you resume it. A check
+the hold paused ends the hold with the setting cleared, which is Healthchecks'
+default.
 
 - An `http`, `tls`, `tcp`, or `dns` check runs its probe at once, and the
   first pass from a probe that started after the hold resumes it. A probe

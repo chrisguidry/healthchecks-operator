@@ -139,6 +139,7 @@ func (c *controller) report(ctx context.Context, key string, started time.Time, 
 	if resuming && kind != healthchecks.PingLog && err == nil {
 		c.log.printf("%s: resumed check %s in Healthchecks, because the hold ended", state.subject(), next.Slug)
 		next.HeldSince, state.resumeAfter = "", time.Time{}
+		state.released()
 	}
 	next.Conditions = withCondition(next.Conditions, probePassing(result, state.generation, c.now()))
 	c.writeCheckStatus(ctx, state, next)

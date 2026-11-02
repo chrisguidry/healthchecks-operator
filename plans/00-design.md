@@ -438,16 +438,25 @@ every check for a while, such as a rollout that reboots each node.
   condition that does not match, and a hold past its `maxDuration` all pause
   nothing. After `maxDuration`, the `Holding` condition says `Expired` until
   the condition stops matching, so one long match holds once.
-- At the start of a hold, the upsert sends `manual_resume: true`, and its
-  response gives the check's status. The operator pauses each check that is
-  not `down` or `paused`. A down check has notified already, and a person
+- `manual_resume` is a person's setting outside a hold: "Ignore the ping,
+  stay in the paused state" in a check's filtering rules. The upsert omits
+  it, which leaves it alone, for every check a hold has not paused, so a
+  check a person paused with it set stays paused through every probe.
+- At the start of a hold, the pass's upsert, or the same request again when
+  the pass sent none, gives the check's status. The operator pauses each
+  check that is not `down` or `paused`, with an upsert that sends
+  `manual_resume: true` before the pause, so no ping between the two
+  resumes it. A down check has notified already, and a person
   paused the other. `status.heldSince` on the `Check` records the pause,
   so an operator that restarts during a hold resumes only the checks it
-  paused.
+  paused. It is set with `manual_resume`, before the pause, because only a
+  check with `heldSince` gets `manual_resume: false` at the end; a check
+  with `heldSince` whose pause did not land is paused again.
 - With `manual_resume` set, a paused check records each ping as `ign` and
   keeps its status, a failure included. The probes go on, and their pings
   change nothing in Healthchecks.
-- At the end, the upsert sends `manual_resume: false`, and then one ping
+- At the end, the upsert sends `manual_resume: false` to each check the
+  hold paused, which is Healthchecks' default, and then one ping
   resumes each paused check. A timed probe runs at once, and the first
   success from a run that started after the hold resumes the check. A run
   that started inside the hold reports nothing. A failure after the hold

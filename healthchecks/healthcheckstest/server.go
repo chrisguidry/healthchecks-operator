@@ -129,6 +129,14 @@ func (s *Server) SetStatus(slug, status string) {
 	s.checks[slug].status = status
 }
 
+// SetManualResume sets the manual_resume of the check at slug, as a
+// person does in the web UI under the check's filtering rules.
+func (s *Server) SetManualResume(slug string, manualResume bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checks[slug].manualResume = manualResume
+}
+
 // Notifications reads back each status change that notified the
 // channels of a check's UUID, oldest first.
 func (s *Server) Notifications(uuid string) []string {

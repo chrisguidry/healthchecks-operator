@@ -300,9 +300,10 @@ func (v verdict) remote() bool {
 	return v.reason == reasonUpsertFailed || v.reason == reasonDeleteFailed || v.reason == reasonHealthchecks || v.reason == reasonHoldFailed
 }
 
-// note counts and logs a verdict. The log writes a failure once, and
-// again only when its message changes, so a fault that lasts writes
-// one line and not one line each pass.
+// note counts and logs a verdict. The log writes a failure once when
+// it starts, whatever its message becomes while it lasts, and once more
+// when it clears, so a fault that lasts writes one line and not one
+// line each pass.
 func (c *controller) note(subject, kind string, v verdict) {
 	if v.ready() {
 		c.log.clear(subject, topicReconcile)

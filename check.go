@@ -67,10 +67,13 @@ type checkState struct {
 	// finalizer removal does not delete it again.
 	deleted bool
 	// upserted is the check's status that this pass's upsert returned,
-	// or empty when the pass sent no upsert. holdSeen is the start of
-	// the hold that holdCheck last judged the check for.
-	upserted string
-	holdSeen string
+	// or empty when the pass sent no upsert. holdPaused is the start of
+	// the last hold that this process saw the check paused for, and
+	// holdSkipped the start of the last hold that found the check down
+	// or paused already, and so left it alone.
+	upserted    string
+	holdPaused  string
+	holdSkipped string
 	// resumeAfter is when a pass found the hold over a probe check that
 	// it paused, or zero. A probe run that started before it does not
 	// resume the check. resumeBy is when a failed probe stops waiting
@@ -211,7 +214,7 @@ func (c *controller) projectFor(check *Check) (*projectState, verdict) {
 // reports the CronJob's runs. It fills in next's slug, uuid, ping URL,
 // and ConfigMap.
 func (c *controller) syncCheck(ctx context.Context, check *Check, state *checkState, project *projectState, w *world, next *CheckStatus) verdict {
-	request, v := c.upsertRequest(check, project, w)
+	request, v := c.upsertRequest(check, project, w, next.HeldSince != "")
 	if !v.ready() {
 		return v
 	}
@@ -219,7 +222,7 @@ func (c *controller) syncCheck(ctx context.Context, check *Check, state *checkSt
 	if v := c.upsertCheck(ctx, state, check.Spec.ProjectRef.Name, project, request, next); !v.ready() {
 		return v
 	}
-	if v := c.holdCheck(ctx, state, check, request.Grace, project, next); !v.ready() {
+	if v := c.holdCheck(ctx, state, check, request, project, next); !v.ready() {
 		return v
 	}
 	if v := c.syncConfigMap(ctx, check, state, w, next); !v.ready() {

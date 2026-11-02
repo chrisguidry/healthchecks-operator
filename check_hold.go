@@ -39,14 +39,13 @@ import (
 const reasonHoldFailed = "HoldFailed"
 
 // holdCheck pauses the check when its project's hold starts, and
-// resumes it when the hold ends. The pass's upsert has already sent
-// manual_resume to match the hold, so a pause holds through every
-// ping, and the resume's ping counts.
-func (c *controller) holdCheck(ctx context.Context, state *checkState, check *Check, grace time.Duration, project *projectState, next *CheckStatus) verdict {
+// resumes it when the hold ends. At the end, the pass's upsert has
+// already sent manual_resume false, so the resume's ping counts.
+func (c *controller) holdCheck(ctx context.Context, state *checkState, check *Check, request healthchecks.UpsertRequest, project *projectState, next *CheckStatus) verdict {
 	name := check.Spec.ProjectRef.Name
 	if project.holding {
 		state.resumeAfter, state.resumeBy = time.Time{}, time.Time{}
-		return c.pauseCheck(ctx, state, name, project, next)
+		return c.pauseCheck(ctx, state, name, project, request, next)
 	}
 	if next.HeldSince == "" {
 		return synced
@@ -54,7 +53,7 @@ func (c *controller) holdCheck(ctx context.Context, state *checkState, check *Ch
 	if check.Spec.ProbeKind().timed() {
 		// upsertRequest has already parsed the interval.
 		interval, _ := probeInterval(check.Spec)
-		c.awaitProbe(state, interval+grace)
+		c.awaitProbe(state, interval+request.Grace)
 		return synced
 	}
 	kind, body := healthchecks.PingSuccess, "the hold on ClusterProject "+name+" ended"
@@ -67,7 +66,22 @@ func (c *controller) holdCheck(ctx context.Context, state *checkState, check *Ch
 	}
 	c.log.printf("%s: resumed check %s in Healthchecks, because the hold ended", state.subject(), next.Slug)
 	next.HeldSince = ""
+	state.released()
 	return synced
+}
+
+// released records that the hold no longer sets the check's
+// manual_resume. Healthchecks keeps the false that the end of the hold
+// sent, and the requests that follow leave the field alone, so the
+// request sent last stands for them. Without this, the next pass sends
+// the same request again only to omit the field.
+func (s *checkState) released() {
+	if s.sent == nil || s.sent.ManualResume == nil {
+		return
+	}
+	sent := *s.sent
+	sent.ManualResume = nil
+	s.sent = &sent
 }
 
 // awaitProbe makes the check's probe due at once, the first time a pass
@@ -86,15 +100,60 @@ func (c *controller) awaitProbe(state *checkState, patience time.Duration) {
 }
 
 // pauseCheck pauses the check once for each hold. A check that is down
-// has notified already, and a check that a person paused stays paused
-// after the hold, so the hold pauses neither.
-func (c *controller) pauseCheck(ctx context.Context, state *checkState, name string, project *projectState, next *CheckStatus) verdict {
-	if next.HeldSince != "" || state.holdSeen == project.since {
+// has notified already, and a check that a person paused is theirs to
+// resume, so the hold pauses neither and leaves their manual_resume
+// alone.
+//
+// The pause sets manual_resume first, so a ping between the two calls
+// cannot resume the check. That replaces the setting a person gave the
+// check, and the end of the hold sets it to false, which is
+// Healthchecks' default. The setting matters only while a check is
+// paused, and the hold pauses only a check that is not.
+//
+// status.heldSince is set with manual_resume, before the pause, because
+// only a check with heldSince gets manual_resume false when the hold
+// ends. A check paused with manual_resume and no heldSince would ignore
+// every ping for good. So a check with heldSince whose pause is not
+// confirmed, after a failed pause or a restart, is paused again unless
+// Healthchecks already has it paused.
+func (c *controller) pauseCheck(ctx context.Context, state *checkState, name string, project *projectState, request healthchecks.UpsertRequest, next *CheckStatus) verdict {
+	switch {
+	case state.holdPaused == project.since:
+		// A status write that failed lost heldSince, so it goes in again.
+		if next.HeldSince == "" {
+			next.HeldSince = project.since
+		}
+		return synced
+	case next.HeldSince == "" && state.holdSkipped == project.since:
 		return synced
 	}
-	if state.upserted == "" || state.upserted == "down" || state.upserted == "paused" {
-		state.holdSeen = project.since
+	status := state.upserted
+	if status == "" {
+		// The pass sent no upsert, because the request did not change.
+		// The same request reads the check's status and changes nothing.
+		result, err := project.client.Upsert(ctx, request)
+		if err != nil {
+			return verdict{reasonHoldFailed, "reading the check's status for the hold: " + errorText(err)}
+		}
+		status = result.Status
+	}
+	if next.HeldSince != "" && status == "paused" {
+		state.holdPaused = project.since
 		return synced
+	}
+	if next.HeldSince == "" {
+		if status == "down" || status == "paused" {
+			state.holdSkipped = project.since
+			return synced
+		}
+		ignore := true
+		request.ManualResume = &ignore
+		if _, err := project.client.Upsert(ctx, request); err != nil {
+			state.sent = nil
+			return verdict{reasonHoldFailed, "ignoring pings for the hold: " + errorText(err)}
+		}
+		state.sent = &request
+		next.HeldSince = project.since
 	}
 	if err := project.client.Pause(ctx, next.UUID); err != nil {
 		// The next pass sends the upsert again, because its response
@@ -103,6 +162,6 @@ func (c *controller) pauseCheck(ctx context.Context, state *checkState, name str
 		return verdict{reasonHoldFailed, "pausing the check for the hold: " + errorText(err)}
 	}
 	c.log.printf("%s: paused check %s in Healthchecks, because ClusterProject %s holds its checks", state.subject(), next.Slug, name)
-	state.holdSeen, next.HeldSince = project.since, project.since
+	state.holdPaused = project.since
 	return synced
 }

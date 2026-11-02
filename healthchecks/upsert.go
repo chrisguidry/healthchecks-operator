@@ -57,8 +57,10 @@ type UpsertRequest struct {
 	Period      Period
 	// ManualResume keeps a paused check paused until a person or the
 	// API resumes it. Healthchecks then records every ping to the check
-	// as ignored, a failure included, and leaves its status alone.
-	ManualResume bool
+	// as ignored, a failure included, and leaves its status alone. Nil
+	// leaves the check's own setting alone, which a person sets in the
+	// web UI under the check's filtering rules.
+	ManualResume *bool
 }
 
 // Check identifies one check in Healthchecks.
@@ -77,8 +79,9 @@ type UpsertResult struct {
 }
 
 // wireUpsert is the JSON body of a POST to /api/v3/checks/. Grace, Tags,
-// Channels, and ManualResume carry no omitempty: their zero value is a meaningful
-// request to clear the field, not an absent one. Timeout, Schedule, and
+// and Channels carry no omitempty: their zero value is a meaningful
+// request to clear the field, not an absent one. ManualResume is a
+// pointer, so nil leaves the check's own setting alone. Timeout, Schedule, and
 // TZ do carry it, because whichever half of Period is unset must be
 // absent from the request rather than sent as zero.
 type wireUpsert struct {
@@ -93,7 +96,7 @@ type wireUpsert struct {
 	TZ       string   `json:"tz,omitempty"`
 	Unique   []string `json:"unique"`
 
-	ManualResume bool `json:"manual_resume"`
+	ManualResume *bool `json:"manual_resume,omitempty"`
 }
 
 // Upsert creates the check at req.Slug, or updates it if a check with

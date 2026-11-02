@@ -109,9 +109,9 @@ work starts: the condition should read `NotMatched`, not
 ## What happens to the checks
 
 While the hold matches, the operator pauses each check in the project
-that is not already down or paused, and sets `manual_resume` on it.
-Healthchecks records every ping as ignored and sends no alert. Probes go
-on during the hold.
+that is not already down or paused, and sets `manual_resume` on it
+first. Healthchecks records every ping as ignored and sends no alert.
+Probes go on during the hold.
 
 When the hold ends, the operator clears `manual_resume` and resumes each
 paused check:
@@ -128,3 +128,12 @@ paused check:
 A check that stays paused after a hold has not passed a probe yet; read
 its `Passing` condition for the reason. The hold neither pauses nor
 resumes a check that was already down or paused when it started.
+
+`manual_resume` is the setting "Ignore the ping, stay in the paused
+state" under "Pinging a Paused Check" in a check's filtering rules in
+Healthchecks. The operator leaves it alone on every check a hold does
+not pause. Without it, any ping, such as the next passing probe, takes
+a paused check out of the paused state. So to pause a probe check by
+hand and keep it paused, choose that setting when you pause it. A check
+the hold paused ends the hold with the setting cleared, Healthchecks'
+default, so choose it again if you had chosen it before.
