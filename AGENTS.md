@@ -23,6 +23,14 @@ The operator is one flat `package main`, with files grouped by prefix:
 `healthchecks/` is the Healthchecks API client and the ping sender, and
 `healthchecks/healthcheckstest/` is a fake Healthchecks server for tests.
 
+`skills/` holds the Agent Skills, written by hand from the README and the
+code. `.claude-plugin/` makes the repository a plugin marketplace for Claude
+Code and Codex, and `plugin.json` is the portable manifest Codex prefers
+(https://developers.openai.com/codex/plugins/build). A change that alters a
+field, a reason, a default, or a command the README states changes the skill
+that states it in the same commit. Run `claude plugin validate .` after a
+change to the manifests.
+
 ## Tests
 
 Tests run against fakes of the real servers: `kube_server_test.go` for the

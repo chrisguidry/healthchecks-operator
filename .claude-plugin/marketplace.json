@@ -1,0 +1,22 @@
+{
+  "name": "healthchecks-operator",
+  "owner": {
+    "name": "Chris Guidry",
+    "url": "https://github.com/chrisguidry"
+  },
+  "metadata": {
+    "description": "The skills to run healthchecks-operator, which turns Kubernetes resources into checks on a Healthchecks instance."
+  },
+  "plugins": [
+    {
+      "name": "healthchecks",
+      "source": "./",
+      "description": "Install healthchecks-operator, connect a Healthchecks project, declare checks, adopt existing checks, hold checks during a disruption, and troubleshoot.",
+      "category": "Infrastructure",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      }
+    }
+  ]
+}

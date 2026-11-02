@@ -508,6 +508,35 @@ about two seconds. When the leader's node fails, the standby takes over
 about fifteen seconds later. The `healthchecks_leader` metric is 1 on the
 leader. Each pod's log says when it waits, leads, or loses the Lease.
 
+## Agent skills
+
+`skills/` holds [Agent Skills](https://agentskills.io/) for this operator:
+`install`, `connect-a-project`, `declare-a-check`, `adopt-an-existing-check`,
+`hold-during-a-disruption`, and `troubleshoot`. The repository is its own
+plugin marketplace for Claude Code and Codex.
+
+In Claude Code:
+
+```sh
+claude plugin marketplace add chrisguidry/healthchecks-operator
+claude plugin install healthchecks@healthchecks-operator
+```
+
+The skills are namespaced by the plugin's name, so the install guide is
+`/healthchecks:install`.
+
+In Codex, add the marketplace, then install `healthchecks` from it in the
+plugins directory, or with `codex plugin add`:
+
+```sh
+codex plugin marketplace add chrisguidry/healthchecks-operator
+codex plugin add healthchecks@healthchecks-operator
+```
+
+Any other agent that reads the Agent Skills format can take `skills/` directly,
+for example with
+`npx skills add https://github.com/chrisguidry/healthchecks-operator`.
+
 ## Development
 
 `make test` runs every check CI runs: gofmt, vet, the race detector, and the

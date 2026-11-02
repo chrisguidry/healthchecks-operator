@@ -1,0 +1,12 @@
+{
+  "name": "healthchecks",
+  "description": "Install healthchecks-operator, connect a Healthchecks project, declare checks, adopt existing checks, hold checks during a disruption, and troubleshoot.",
+  "author": {
+    "name": "Chris Guidry",
+    "url": "https://github.com/chrisguidry"
+  },
+  "homepage": "https://github.com/chrisguidry/healthchecks-operator",
+  "repository": "https://github.com/chrisguidry/healthchecks-operator",
+  "license": "MIT",
+  "keywords": ["kubernetes", "operator", "healthchecks", "monitoring"]
+}
