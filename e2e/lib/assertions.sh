@@ -383,8 +383,9 @@ assert_no_hot_loop() {
 
 # assert_hold proves a hold against the real Healthchecks: a check that
 # is up is paused with manual_resume, a failure ping to it is recorded
-# as ignored and changes nothing, a check that is down stays down, and
-# the end of the hold resumes the paused check with a success ping.
+# as ignored and changes nothing, a check that is down stays down with
+# its manual_resume left alone, and the end of the hold resumes the
+# paused check with a success ping.
 assert_hold() {
   local node uuid
   node=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
@@ -396,7 +397,7 @@ assert_hold() {
 
   retry "ClusterProject e2e is Holding" 60 project_holding_is True
   retry "example-nightly-export is paused with manual_resume" 60 check_state_is example-nightly-export paused true
-  retry "example-broken-page stays down" 30 check_state_is example-broken-page down true
+  retry "example-broken-page stays down" 30 check_state_is example-broken-page down false
 
   uuid=$(check_uuid example-nightly-export)
   curl -sSf --max-time 10 -X POST "http://127.0.0.1:$HC_PORT/ping/$uuid/fail" >/dev/null
