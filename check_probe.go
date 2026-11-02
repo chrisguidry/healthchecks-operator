@@ -104,9 +104,9 @@ func (c *controller) stopProbe(state *checkState) {
 // report pings the check with one probe's result, and records the
 // result in the Passing condition. A failure's reason is the ping body
 // and the condition's message. A result that matches the one before
-// writes nothing. After a hold, the first ping from a run that started
-// after the hold resumes the check, and a run that started before it
-// reports nothing.
+// writes nothing. After a hold, a run that started before the hold
+// ended reports nothing, and the first success or failure ping from a
+// later run resumes the check.
 func (c *controller) report(ctx context.Context, key string, started time.Time, result probeResult) {
 	state := c.lookupCheck(key)
 	if state == nil {
@@ -125,7 +125,7 @@ func (c *controller) report(ctx context.Context, key string, started time.Time, 
 	}
 	kind, label := healthchecks.PingSuccess, pingSuccess
 	if !result.passed {
-		kind, label = failureKind(state, resuming)
+		kind, label = c.failureKind(state, resuming)
 	}
 	err := healthchecks.Ping(ctx, c.http, state.status.PingURL, kind, result.reason)
 	c.readings.observePing(label, err)
@@ -136,7 +136,7 @@ func (c *controller) report(ctx context.Context, key string, started time.Time, 
 	}
 
 	next := state.status
-	if resuming && err == nil {
+	if resuming && kind != healthchecks.PingLog && err == nil {
 		c.log.printf("%s: resumed check %s in Healthchecks, because the hold ended", state.subject(), next.Slug)
 		next.HeldSince, state.resumeAfter = "", time.Time{}
 	}
@@ -148,14 +148,19 @@ func (c *controller) report(ctx context.Context, key string, started time.Time, 
 // earlier result logs its reason and leaves the check's status alone,
 // so the check goes down only when no success arrives within its
 // timeout and grace, and a brief failure that the next probe recovers
-// from never notifies. Two cases ping fail instead. A Check's first
-// result fails the check, because Healthchecks does not time a check
-// that has never had a success. And the ping that ends a hold fails
-// the check, because a paused check resumes only on a success or a
-// failure, and a log would leave it paused.
-func failureKind(state *checkState, resuming bool) (healthchecks.PingKind, string) {
-	_, earlier := findCondition(state.status.Conditions, passingCondition)
-	if !earlier || resuming {
+// from never notifies. A Check's first result pings fail instead,
+// because Healthchecks does not time a check that has never had a
+// success. After a hold, Healthchecks does not time the paused check
+// either, so the operator times it: a failure logs until resumeBy, and
+// then fails the check, which resumes it as down.
+func (c *controller) failureKind(state *checkState, resuming bool) (healthchecks.PingKind, string) {
+	if resuming {
+		if c.now().Before(state.resumeBy) {
+			return healthchecks.PingLog, pingLog
+		}
+		return healthchecks.PingFail, pingFail
+	}
+	if _, earlier := findCondition(state.status.Conditions, passingCondition); !earlier {
 		return healthchecks.PingFail, pingFail
 	}
 	return healthchecks.PingLog, pingLog

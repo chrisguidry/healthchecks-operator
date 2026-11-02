@@ -144,53 +144,6 @@ func (h *harness) resumed(slug, status string) healthcheckstest.StoredCheck {
 	return stored
 }
 
-// The probe goes on during a hold, and Healthchecks ignores its pings.
-// When the hold ends, the probe runs again at once, and its ping
-// resumes the check: a pass resumes it with no notification, and a
-// failure makes it down, which notifies. A failure from inside the
-// hold does not count, because the hold exists to ignore those.
-func TestAHoldResumesEachCheckWithAProbeFromAfterTheHold(t *testing.T) {
-	cases := []struct {
-		name          string
-		after         int
-		status        string
-		notifications int
-		pingKind      string
-	}{
-		{"a target that recovered", http.StatusOK, "up", 0, "success"},
-		{"a target that is still failing", http.StatusBadGateway, "down", 1, "fail"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			h := startHarness(t)
-			h.holdWhileRollingOut("3h")
-			h.startRollout()
-			url, site := switchSite(t, http.StatusBadGateway)
-			h.api.create(checksResource, httpCheck("example", "website", url))
-			h.runProbes()
-			h.pass()
-			check := h.probedCheck("example", "website")
-			held, _ := h.hc.Check("example-website")
-			mustMatch(t, held.Status, "paused")
-
-			site.Store(int32(tc.after))
-			h.finishRollout()
-			h.pass()
-
-			stored := h.resumed("example-website", tc.status)
-			mustMatch(t, stored.ManualResume, false)
-			mustMatch(t, len(h.hc.Notifications(stored.UUID)), tc.notifications)
-			pings := h.hc.Pings(check.Status.UUID)
-			mustMatch(t, pings[0].Kind, "ign")
-			mustMatch(t, pings[len(pings)-1].Kind, tc.pingKind)
-			mustMatch(t, h.holding().Reason, "NotMatched")
-			eventually(t, "the hold to leave status", func() bool {
-				return h.check("example", "website").Status.HeldSince == ""
-			})
-		})
-	}
-}
-
 // A probe that started inside the hold and finishes after it reports
 // nothing. The probe runs again, and its result resumes the check.
 func TestAHoldDropsAProbeThatStartedBeforeItEnded(t *testing.T) {

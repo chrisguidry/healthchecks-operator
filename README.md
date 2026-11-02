@@ -359,17 +359,14 @@ brief failure that the next probe recovers from never notifies. Set
 `grace` to how long a failure may last before you want to hear about
 it.
 
-Two failures go to `/fail` instead, and take the check down at once:
+A Check's first result goes to `/fail` instead, and takes the check
+down at once. Healthchecks does not time a check that has never had a
+success, so a log would leave a new check that fails from the start in
+its `new` state for good. After a hold, the operator times the check
+itself (see "Hold checks during a disruption").
 
-- A Check's first result. Healthchecks does not time a check that has
-  never had a success, so a log would leave a new check that fails from
-  the start in its `new` state for good.
-- The first result after a hold (see "Hold checks during a
-  disruption"). A paused check resumes only on a success or a failure,
-  so a log would leave it paused.
-
-In both cases, the reason is the ping's body. Healthchecks shows it in
-the check's log:
+Either way, the reason is the ping's body. Healthchecks shows it in the
+check's log:
 
 ```
 https://proxy.example.net/: status 502, want 200
@@ -424,13 +421,20 @@ not already down or paused, and sets `manual_resume` on it. Healthchecks then
 records every ping to the check as ignored, a failure included, and sends no
 alert for a missed ping. The operator's probes go on during the hold. When
 the condition stops matching, the operator clears `manual_resume` and resumes
-each paused check with a ping. A success resumes the check with no
+each paused check with a ping, after the wait that the first item below
+describes for a probe check. A success resumes the check with no
 notification, and a failure makes it down, which notifies.
 
 - An `http`, `tls`, `tcp`, or `dns` check runs its probe at once, and the
-  first result from a probe that started after the hold resumes it. A probe
+  first pass from a probe that started after the hold resumes it. A probe
   from inside the hold does not count, because it often ran while the thing
-  it watches was still coming back.
+  it watches was still coming back. A hold ends when its condition stops
+  matching, and the workloads a rollout restarted may still be starting
+  then, so a failure after the hold goes to `/log` and the check stays
+  paused. If no probe passes within the check's interval plus its `grace`
+  after the hold, the next failure goes to `/fail` and the check goes down,
+  as it would have with no hold. An operator that restarts during that
+  wait starts it again.
 - A `cronJob` check gets its latest Job's result.
 - A `ping` check gets a success, because its workload pings it. Its timer
   starts again, so a workload that stopped during the hold makes it down at

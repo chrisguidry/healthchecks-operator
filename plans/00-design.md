@@ -448,11 +448,17 @@ every check for a while, such as a rollout that reboots each node.
   keeps its status, a failure included. The probes go on, and their pings
   change nothing in Healthchecks.
 - At the end, the upsert sends `manual_resume: false`, and then one ping
-  resumes each paused check. A timed probe runs at once, and the first ping
-  from a run that started after the hold resumes the check. A run that
-  started inside the hold reports nothing. A cronJob check's ping is a
-  failure, with the `Passing` condition's message as its body, when the
-  latest run failed, and a success otherwise. A ping check's ping is a
+  resumes each paused check. A timed probe runs at once, and the first
+  success from a run that started after the hold resumes the check. A run
+  that started inside the hold reports nothing. A failure after the hold
+  goes to `/log`, which leaves the check paused, because the workloads a
+  rollout restarted may still be starting when its condition stops
+  matching. Once the check's interval plus its grace have passed since the
+  hold ended, a failure goes to `/fail` and resumes the check as down, the
+  time the check would have had with no hold. The wait is held in memory,
+  so an operator that restarts during it starts it again. A cronJob
+  check's ping is a failure, with the `Passing` condition's message as its
+  body, when the latest run failed, and a success otherwise. A ping check's ping is a
   success. The operator does not call the resume endpoint, which
   makes the check `new`. A new check does not go down until a ping arrives,
   so a workload that stopped during the hold would never alert.

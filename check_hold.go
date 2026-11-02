@@ -18,8 +18,14 @@ package main
 // from the hold's last minutes, when the thing it watches is still
 // coming back. Sent as the resume, that failure would make the check
 // down, and the next probe would make it up seconds later, with an
-// alert for each. A cronJob check resumes
-// with its latest Job's result, and a ping check with a success.
+// alert for each. The first probes after the hold can fail the same
+// way, because a hold ends when its condition stops matching, and the
+// workloads a rollout restarted may still be starting. So a failure
+// after the hold logs its reason and keeps the check paused until a
+// probe passes, or until the check's interval plus its grace pass
+// after the hold. That is the time the check would have had to pass
+// with no hold. A cronJob check resumes with its latest Job's result,
+// and a ping check with a success.
 
 import (
 	"context"
@@ -36,16 +42,19 @@ const reasonHoldFailed = "HoldFailed"
 // resumes it when the hold ends. The pass's upsert has already sent
 // manual_resume to match the hold, so a pause holds through every
 // ping, and the resume's ping counts.
-func (c *controller) holdCheck(ctx context.Context, state *checkState, probeKind ProbeKind, name string, project *projectState, next *CheckStatus) verdict {
+func (c *controller) holdCheck(ctx context.Context, state *checkState, check *Check, grace time.Duration, project *projectState, next *CheckStatus) verdict {
+	name := check.Spec.ProjectRef.Name
 	if project.holding {
-		state.resumeAfter = time.Time{}
+		state.resumeAfter, state.resumeBy = time.Time{}, time.Time{}
 		return c.pauseCheck(ctx, state, name, project, next)
 	}
 	if next.HeldSince == "" {
 		return synced
 	}
-	if probeKind.timed() {
-		c.awaitProbe(state)
+	if check.Spec.ProbeKind().timed() {
+		// upsertRequest has already parsed the interval.
+		interval, _ := probeInterval(check.Spec)
+		c.awaitProbe(state, interval+grace)
 		return synced
 	}
 	kind, body := healthchecks.PingSuccess, "the hold on ClusterProject "+name+" ended"
@@ -62,14 +71,17 @@ func (c *controller) holdCheck(ctx context.Context, state *checkState, probeKind
 }
 
 // awaitProbe makes the check's probe due at once, the first time a pass
-// finds its hold ended. report resumes the check with the first result
-// from a run that started after this. A probe that is not registered
-// yet is due at once when the pass registers it.
-func (c *controller) awaitProbe(state *checkState) {
+// finds its hold ended. report resumes the check with the first pass
+// from a run that started after this, or with the first failure once
+// patience has passed. A probe that is not registered yet is due at
+// once when the pass registers it. An operator that restarts in the
+// wait starts it again, because the wait is held only in memory.
+func (c *controller) awaitProbe(state *checkState, patience time.Duration) {
 	if !state.resumeAfter.IsZero() {
 		return
 	}
 	state.resumeAfter = c.now()
+	state.resumeBy = state.resumeAfter.Add(patience)
 	c.schedule.expedite(state.namespace + "/" + state.name)
 }
 
