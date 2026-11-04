@@ -53,9 +53,12 @@ images:
     newTag: <version>
 ```
 
-With Flux, point a `GitRepository` at the tag and a `Kustomization` at
-`./deploy`, with the same `images` entry. The README's Install section
-has the full pair.
+With Flux, point an `OCIRepository` at
+`oci://ghcr.io/chrisguidry/healthchecks-operator-deploy` at the release's
+tag, and a `Kustomization` at `./` with no `images` entry: each version
+publishes `deploy/` there with the image already set to that version, so
+the manifests and the image arrive in one revision. The README's Install
+section has the full pair. The artifacts start at release 2026.11.04-001.
 
 For a one-time install from a checkout of the tag:
 

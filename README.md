@@ -15,19 +15,24 @@ Deployment into the namespace `healthchecks-operator`, and it names the image
 `ghcr.io/chrisguidry/healthchecks-operator:latest`. It does not create the
 namespace: create it yourself, or set `targetNamespace` to one you already
 run, so removing the operator never deletes a namespace other workloads
-share. Take the base through your own GitOps and pin a release tag. With
-Flux:
+share. Take the base through your own GitOps and pin a release.
+
+With Flux, follow the OCI artifact
+`oci://ghcr.io/chrisguidry/healthchecks-operator-deploy`. Each version
+of the operator publishes `deploy/` there after its image, with the image
+already set to the same version, so the manifests and the image move in
+one revision. The artifacts start at release 2026.11.04-001:
 
 ```yaml
 apiVersion: source.toolkit.fluxcd.io/v1
-kind: GitRepository
+kind: OCIRepository
 metadata:
   name: healthchecks-operator
 spec:
   interval: 12h
-  url: https://github.com/chrisguidry/healthchecks-operator
+  url: oci://ghcr.io/chrisguidry/healthchecks-operator-deploy
   ref:
-    tag: 2026.09.27-001
+    tag: 2026.11.04-001
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -37,13 +42,15 @@ spec:
   interval: 1h
   prune: true
   sourceRef:
-    kind: GitRepository
+    kind: OCIRepository
     name: healthchecks-operator
-  path: ./deploy
-  images:
-    - name: ghcr.io/chrisguidry/healthchecks-operator
-      newTag: 2026.09.27-001
+  path: ./
 ```
+
+A Kustomization that takes the base from a git tag and sets the image in
+`images` can apply a new image with the old base: the image changes the
+moment the Kustomization does, and the base only when the source fetches
+the new tag. A release that needs a manifest change then fails to start.
 
 Or apply it once with `kubectl create namespace healthchecks-operator` and
 `kubectl apply -k deploy`.
