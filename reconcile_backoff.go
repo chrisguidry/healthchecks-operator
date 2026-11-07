@@ -1,6 +1,7 @@
 package main
 
-// A failed call to Healthchecks puts its object on a backoff. Without
+// A failed call to Healthchecks, or a failed read of a project's API
+// key, puts its object on a backoff. Without
 // it, a failure feeds itself: the failure changes the Ready message,
 // the status write wakes a watch, and the watch starts a pass at once,
 // which calls Healthchecks again. During the backoff a pass skips the

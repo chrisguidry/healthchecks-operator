@@ -28,7 +28,7 @@ projects first.
 
 | Reason | Fix |
 |---|---|
-| `SecretUnreadable` | The Secret `apiKeySecret` names, or its key, is missing from the operator's namespace. The operator reads Secrets from its own namespace only. |
+| `SecretUnreadable` | The Secret `apiKeySecret` names, or its key, is missing from the operator's namespace. The operator reads Secrets from its own namespace only. Reads back off from 5 seconds to 5 minutes. |
 | `HealthchecksError` | Listing the project's channels failed; the message has the HTTP error. Check `spec.url`, and that the key is read-write and from this project. Retries back off from 5 seconds to 5 minutes. |
 | `ChannelNotFound` | A name in `spec.channels` matches no integration. Names match exactly. Make it in the web UI; the next pass, within 30 seconds, lists the channels again. |
 

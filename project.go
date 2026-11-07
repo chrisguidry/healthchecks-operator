@@ -185,7 +185,10 @@ func (c *controller) readKey(ctx context.Context, project *ClusterProject, state
 func (c *controller) connectProject(ctx context.Context, project *ClusterProject, state *projectState) verdict {
 	key, err := c.readKey(ctx, project, state)
 	if err != nil {
+		// No event announces a Secret that appears or changes, so a pass
+		// would read it again every time without the backoff.
 		state.client, state.listed, state.apiKey = nil, false, ""
+		state.backoff.failed(c.now())
 		return verdict{reasonSecretUnreadable, errorText(err)}
 	}
 	if state.client == nil || state.url != project.Spec.URL || state.apiKey != key || state.client.KeyRefused() {

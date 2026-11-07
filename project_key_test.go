@@ -101,3 +101,25 @@ func TestARefusedKeyIsReadAgain(t *testing.T) {
 	stored, _ := h.hc.Check(h.check("example", "site").Status.Slug)
 	mustMatch(t, stored.Description, "Rotated")
 }
+
+// A Secret that cannot be read puts the project on a backoff, so a pass
+// that comes before the delay ends reads it no more, and the project
+// stays not Ready.
+func TestASecretThatCannotBeReadIsReadAgainOnlyAfterTheBackoff(t *testing.T) {
+	h := startHarness(t)
+	h.pass()
+	h.api.delete(secretsResource, operatorNamespace, "internal-healthchecks")
+	h.clock.advance(keyReadPeriod)
+	h.pass()
+	reads := h.keyReads()
+
+	h.pass()
+	h.pass()
+	early := h.keyReads()
+	h.clock.advance(backoffFirst)
+	h.pass()
+
+	mustMatch(t, early, reads)
+	mustMatch(t, h.keyReads(), reads+1)
+	mustMatch(t, h.projectReady().Reason, reasonSecretUnreadable)
+}
