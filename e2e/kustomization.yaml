@@ -9,6 +9,10 @@
 # renders. Everything else a Check in checks.yaml reaches by the same
 # hostname resolves the same way, since a hostAlias is a hostname-to-IP
 # mapping, not a route to one container in particular.
+#
+# The e2e cluster has one node, so the base's required anti-affinity
+# would leave the second replica Pending. The patch makes it a
+# preference, so both replicas run and elect a leader on that node.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
@@ -32,3 +36,14 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: HEARTBEAT_SLUG, value: operator-heartbeat}
+      - op: replace
+        path: /spec/template/spec/affinity
+        value:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      app: healthchecks-operator
