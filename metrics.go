@@ -65,7 +65,7 @@ func newMetrics(version string) *metrics {
 		}, []string{"kind"}),
 		watchRestarts: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: metricsPrefix + "watch_restarts_total",
-			Help: "Watches that ended and opened again after a list, by resource.",
+			Help: "Watches that ended and opened again, by resource.",
 		}, []string{"resource"}),
 		probeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    metricsPrefix + "probe_duration_seconds",
