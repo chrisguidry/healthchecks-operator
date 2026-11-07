@@ -431,10 +431,15 @@ every check for a while, such as a rollout that reboots each node.
   `name`. The resource is the plural an RBAC rule uses, so the operator needs
   no discovery request, and the installer writes the same word in the RBAC
   rule that grants the read.
-- The operator watches each resource a hold names, the way it watches its
-  own. The pass that first needs a resource lists it, so that pass reads a
-  full store. A list that fails leaves the hold unread, and the next pass
-  lists again.
+- The operator watches the one object each hold names, selected by
+  `metadata.name` in the object's namespace, so RBAC may grant it by
+  `resourceNames`. The watch's first list runs in the watch's own
+  goroutine with the watch's backoff, so a target the operator cannot list
+  never holds up a pass. Until that list lands, a hold that stands, or
+  one that expired, stays as it was, so a restart during a rollout neither
+  releases the hold nor starts its `maxDuration` again; the `maxDuration`
+  still ends a hold whose object is never read. Any other hold says
+  `TargetUnreadable`, with the list's error once there is one.
 - A hold fails open. An object the operator cannot read or cannot find, a
   condition that does not match, and a hold past its `maxDuration` all pause
   nothing. After `maxDuration`, the `Holding` condition says `Expired` until

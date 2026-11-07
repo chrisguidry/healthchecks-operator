@@ -143,6 +143,7 @@ func startHarness(t *testing.T) *harness {
 func (h *harness) restart(config settings) *controller {
 	h.log = &syncBuffer{}
 	c := newController(config, h.api.client, newMetrics("dev"), h.clock.now, h.log)
+	c.targetPause, c.targetBackoff = 5*time.Millisecond, 20*time.Millisecond
 	h.t.Cleanup(c.targetsRunning.Wait)
 	return c
 }
@@ -162,6 +163,7 @@ func (h *harness) pass() {
 	h.watch()
 	eventually(h.t, "the stores to hold the cluster", h.synced)
 	h.c.pass(h.t.Context())
+	h.settleTargets()
 }
 
 // watch lists and starts the watches of the current controller, until
@@ -187,12 +189,45 @@ func (h *harness) synced() bool {
 			return false
 		}
 	}
-	for resource, target := range h.c.targets {
-		if !maps.Equal(storedVersions(h.t, target.watch.store), h.api.versions(resource, "")) {
+	for _, target := range h.c.targets {
+		if synced, _ := target.state(); !synced {
+			continue
+		}
+		want := map[string]string{}
+		for key, version := range h.api.versions(target.watch.resource, "") {
+			if strings.HasSuffix(key, "/"+strings.TrimPrefix(target.watch.fields, "metadata.name=")) {
+				want[key] = version
+			}
+		}
+		if !maps.Equal(storedVersions(h.t, target.watch.store), want) {
 			return false
 		}
 	}
 	return true
+}
+
+// settleTargets gives each hold's watch a moment to read its object,
+// then runs the pass again, so a test's pass reads the object as the
+// pass after the watch's first list does. A watch that stays refused
+// is left to fail, and the second pass says so.
+func (h *harness) settleTargets() {
+	h.t.Helper()
+	if len(h.c.targets) == 0 {
+		return
+	}
+	read := func() bool {
+		for _, target := range h.c.targets {
+			if synced, _ := target.state(); !synced {
+				return false
+			}
+		}
+		return true
+	}
+	for deadline := time.Now().Add(200 * time.Millisecond); !read() && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	eventually(h.t, "the stores to hold the cluster", h.synced)
+	h.c.pass(h.t.Context())
 }
 
 // runProbes runs the controller's probe schedule until the test ends.

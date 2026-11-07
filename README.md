@@ -459,7 +459,9 @@ operator resumes the checks, and the next hold starts only after the
 condition stops matching and matches again. A hold whose object the operator
 cannot read, or that does not exist, pauses nothing. The `Holding` condition
 on the `ClusterProject` says which of these is true, and its
-`lastTransitionTime` says when the hold started.
+`lastTransitionTime` says when the hold started. An operator that restarts
+during a hold keeps it as it stood until it reads the object again, so the
+restart neither releases the hold nor starts its `maxDuration` again.
 
 The operator's ClusterRole does not cover the object a hold names. Grant it
 yourself:

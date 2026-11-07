@@ -89,12 +89,15 @@ type controller struct {
 
 	// projects is read and written by the pass only.
 	projects map[string]*projectState
-	// targets watches each resource that a hold names, and targetFaults
-	// holds why a resource could not be listed. The pass alone reads and
-	// writes both, and targetsRunning waits for the watches to stop.
-	targets        map[kubeResource]*targetWatch
-	targetFaults   map[kubeResource]string
+	// targets watches each object that a hold names, by its key. The
+	// pass alone reads and writes the map, and targetsRunning waits for
+	// the watches to stop. targetPause and targetBackoff are the
+	// watches' waits after a failure, fields so a test waits
+	// milliseconds.
+	targets        map[string]*targetWatch
 	targetsRunning sync.WaitGroup
+	targetPause    time.Duration
+	targetBackoff  time.Duration
 
 	// jobNamespaces holds the namespaces with a cronJob Check, as the
 	// last pass read them, or nil before the first pass. The Job watch's
@@ -121,9 +124,10 @@ func newController(config settings, client *kubeClient, readings *metrics, now f
 		projects:  map[string]*projectState{},
 		checks:    map[string]*checkState{},
 		watches:   map[kubeResource]*collectionWatch{},
-		targets:   map[kubeResource]*targetWatch{},
+		targets:   map[string]*targetWatch{},
 
-		targetFaults: map[kubeResource]string{},
+		targetPause:   2 * time.Second,
+		targetBackoff: time.Minute,
 	}
 	for _, resource := range watchedCollections {
 		c.watches[resource] = newCollectionWatch(client, resource, "", selectors[resource], trims[resource], c.wake, readings.watchRestarted(resource.Resource))
