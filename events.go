@@ -4,9 +4,10 @@ package main
 // condition on a Check or a ClusterProject, which a person reads in
 // `kubectl describe` or `kubectl get events`: a Check that became Ready
 // or stopped being Ready, or a hold that started or ended. A condition
-// answers what is true now, and an Event what just happened. The log line of each decision stays, because a log holds
-// every attempt and detail, and the API server deletes an Event an
-// hour after its last write.
+// answers what is true now, and an Event what just happened. The log
+// line of each decision stays, because a log holds every attempt and
+// detail, and the API server deletes an Event an hour after its last
+// write.
 //
 // The Events are core/v1, as liken's kubernetes/events package writes
 // them, which `kubectl describe` and `kubectl get events` read. They

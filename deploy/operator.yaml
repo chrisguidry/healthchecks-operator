@@ -1,9 +1,9 @@
 # The operator: one Deployment with two replicas. One replica leads and
 # does the work, and the other waits as a standby. The leader holds a
 # Lease in this namespace. When the leader stops, it releases the Lease
-# and the standby takes over within a retry period of three seconds. When
-# the leader's node fails, the standby takes over once the Lease has
-# gone fifteen seconds without a renewal.
+# and the standby takes over within a retry period. When the leader's
+# node fails, the standby takes over once the Lease has gone a lease
+# duration without a renewal.
 #
 # The anti-affinity requires the replicas on different nodes, so one
 # node failure cannot stop both, and a cluster of one node runs one and
