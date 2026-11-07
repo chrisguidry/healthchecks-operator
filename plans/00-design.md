@@ -561,10 +561,10 @@ The operator follows the patterns of the liken-sh operators
   no watches open.
 - The leader holds the `coordination.k8s.io/v1` Lease
   `healthchecks-operator` in the operator's namespace, and renews it every
-  2 seconds. The holder's identity is the pod's hostname and a random
+  3 seconds. The holder's identity is the pod's hostname and a random
   suffix, so a container that restarts in the same pod is a new
   candidate.
-- A standby tries for the Lease every 2 seconds. It takes the Lease when
+- A standby tries for the Lease every 3 seconds. It takes the Lease when
   the holder is empty, or when the Lease has not changed for 15 seconds
   by the standby's own clock, counted from when it first read the Lease
   as it is. A clock that disagrees with the leader's cannot make a Lease
@@ -581,7 +581,7 @@ The operator follows the patterns of the liken-sh operators
 - A leader that gets SIGTERM stops its work, then clears the holder with
   a patch at the version it last wrote, so a standby takes over on its
   next try instead of 15 seconds later. A rollout or a drain moves the
-  work in about 2 seconds.
+  work in about 3 seconds.
 - A new leader starts the way a restarted operator starts. Everything
   it needs is in `status` and in Healthchecks: see "Restarts and missed
   runs".
@@ -697,7 +697,8 @@ the message is the text Healthchecks returned.
 - client-go leader election, `tools/leaderelection/leaderelection.go` on
   `master`, <https://github.com/kubernetes/client-go/blob/master/tools/leaderelection/leaderelection.go>,
   read 2026-10-28: a lease duration of 15 seconds, a renew deadline of 10, and a
-  retry period of 2; expiry measured from when the candidate observed the
+  retry period of 2, which the operator lengthens to 3 to send fewer
+  requests; expiry measured from when the candidate observed the
   record, not from `renewTime`; and a release that clears the holder.
 - Lease, `coordination.k8s.io/v1`,
   <https://kubernetes.io/docs/reference/kubernetes-api/cluster-resources/lease-v1/>,
