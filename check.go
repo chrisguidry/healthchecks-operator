@@ -327,6 +327,8 @@ func (c *controller) writeCheckStatus(ctx context.Context, state *checkState, ne
 		return
 	}
 	c.log.clear(state.subject(), topicStatus)
+	c.readings.wroteStatus(checkKind)
+	c.postTransitions(objectReference{APIVersion: apiVersion, Kind: checkKind, Namespace: state.namespace, Name: state.name, UID: state.uid}, state.status.Conditions, next.Conditions)
 	state.status = next
 }
 

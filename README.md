@@ -510,8 +510,8 @@ down.
 
 ## Replicas and failover
 
-The Deployment runs two replicas, on different nodes when the cluster has
-more than one. One leads and does the work, and the other waits. They
+The Deployment runs two replicas, which must run on different nodes, and a
+PodDisruptionBudget lets a drain stop one at a time. One leads and does the work, and the other waits. They
 elect the leader through the Lease `healthchecks-operator` in the
 operator's namespace:
 
@@ -520,7 +520,7 @@ kubectl -n healthchecks-operator get lease healthchecks-operator
 ```
 
 When the leader stops for a rollout or a drain, the standby takes over in
-about two seconds. When the leader's node fails, the standby takes over
+about three seconds. When the leader's node fails, the standby takes over
 about fifteen seconds later. The `healthchecks_leader` metric is 1 on the
 leader. Each pod's log says when it waits, leads, or loses the Lease.
 

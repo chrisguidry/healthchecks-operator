@@ -116,6 +116,8 @@ func (c *controller) reconcileProject(ctx context.Context, project *ClusterProje
 			c.readings.reconcileFailed(clusterProjectKind)
 			return
 		}
+		c.readings.wroteStatus(clusterProjectKind)
+		c.postTransitions(referenceTo(clusterProjectKind, project.Metadata), project.Status.Conditions, status.Conditions)
 	}
 	c.note("clusterproject "+name, clusterProjectKind, state.verdict)
 }

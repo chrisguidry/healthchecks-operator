@@ -563,11 +563,16 @@ The operator follows the patterns of the liken-sh operators
   requeue for each `Check`.
 - In steady state, the only outbound traffic is probes and pings.
 - Two replicas, with leader election. See "Leader election".
+- One Event for each transition of a condition, a new status or a new
+  reason, posted once the status that holds it is written. A recorder
+  writes them from its own goroutine, and at shutdown, after every pass
+  and probe has stopped, sends each one still queued.
 
 ### Leader election
 
-- The Deployment runs two replicas, placed on different nodes when the
-  cluster has more than one. One replica, the leader, runs the reconcile
+- The Deployment runs two replicas, which a required anti-affinity places
+  on different nodes, and a PodDisruptionBudget lets a drain stop one at a
+  time. One replica, the leader, runs the reconcile
   loop, the probes, and the heartbeat. The other waits as a standby, with
   no watches open.
 - The leader holds the `coordination.k8s.io/v1` Lease

@@ -1,12 +1,13 @@
 # The operator: one Deployment with two replicas. One replica leads and
 # does the work, and the other waits as a standby. The leader holds a
 # Lease in this namespace. When the leader stops, it releases the Lease
-# and the standby takes over within a retry period of two seconds. When
+# and the standby takes over within a retry period of three seconds. When
 # the leader's node fails, the standby takes over once the Lease has
 # gone fifteen seconds without a renewal.
 #
-# The anti-affinity places the replicas on different nodes when the
-# cluster has more than one, so one node failure cannot stop both.
+# The anti-affinity requires the replicas on different nodes, so one
+# node failure cannot stop both, and a cluster of one node runs one and
+# leaves the other Pending. The budget lets a drain stop one at a time.
 #
 # The pod keeps no state. It reads everything from the API server and
 # from Healthchecks when it starts to lead.
@@ -33,13 +34,11 @@ spec:
       serviceAccountName: healthchecks-operator
       affinity:
         podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                topologyKey: kubernetes.io/hostname
-                labelSelector:
-                  matchLabels:
-                    app: healthchecks-operator
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: healthchecks-operator
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -62,6 +61,13 @@ spec:
           ports:
             - name: metrics
               containerPort: 9200
+          # Ready unless this replica leads and has not yet listed what
+          # it watches.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 10
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -73,3 +79,13 @@ spec:
               memory: 32Mi
             limits:
               memory: 128Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: healthchecks-operator
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: healthchecks-operator

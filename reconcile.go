@@ -65,6 +65,14 @@ var trims = map[kubeResource]func(json.RawMessage) (json.RawMessage, error){
 // often means a loop that finished no pass in two minutes is stuck.
 const backstopInterval = 30 * time.Second
 
+// eventTimeout bounds each write of an Event, and eventRetryWait is the
+// time between two sends of one write. An API server that restarts
+// refuses connections for some seconds, which the retries cover.
+const (
+	eventTimeout   = 5 * time.Second
+	eventRetryWait = 10 * time.Second
+)
+
 // healthchecksTimeout bounds each call to a Healthchecks instance, a
 // ping included, so an instance that stops answering does not stop
 // the loop.
@@ -78,6 +86,7 @@ type controller struct {
 	now       func() time.Time
 	http      *http.Client
 	log       *lineLog
+	events    *eventRecorder
 	wake      chan struct{}
 	backstop  time.Duration
 	schedule  *probeSchedule
@@ -135,6 +144,7 @@ func newController(config settings, client *kubeClient, readings *metrics, now f
 	// The Job watch holds every Job in the cluster, and a pass reads only
 	// the Jobs in a namespace with a cronJob Check, so only those wake it.
 	c.watches[jobsResource].store.wakeOnly(c.namespaceReportsJobs)
+	c.events = newEventRecorder(client, now, c.log)
 	c.schedule = newProbeSchedule(now, c.report)
 	if config.heartbeatProject != "" {
 		c.heartbeat = newHeartbeat(config.heartbeatProject, config.heartbeatSlug, c)
@@ -161,9 +171,23 @@ func (c *controller) run(ctx context.Context) error {
 
 	// run returns only after the goroutines it started stop, so none of
 	// them calls an API after it.
+	c.readings.setSynced(true)
+	defer c.readings.setSynced(false)
 	var running sync.WaitGroup
 	defer running.Wait()
 	defer c.targetsRunning.Wait()
+	// The recorder outlives the passes and the probes, so the Events of
+	// the last ones are sent once every other writer has stopped.
+	writing, stopWriting := context.WithCancel(context.WithoutCancel(ctx))
+	var recording sync.WaitGroup
+	recording.Go(func() { c.events.run(writing, eventRetryWait, eventTimeout) })
+	defer func() {
+		running.Wait()
+		c.targetsRunning.Wait()
+		stopWriting()
+		recording.Wait()
+		c.events.flush(eventTimeout)
+	}()
 	c.watch(ctx, &running, versions)
 	running.Go(func() { c.schedule.run(ctx) })
 	if c.heartbeat != nil {
@@ -172,13 +196,16 @@ func (c *controller) run(ctx context.Context) error {
 
 	ticker := time.NewTicker(c.backstop)
 	defer ticker.Stop()
-	for {
+	for cause := passStart; ; {
+		c.readings.passes.WithLabelValues(cause).Inc()
 		c.pass(ctx)
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-c.wake:
+			cause = passEvent
 		case <-ticker.C:
+			cause = passBackstop
 		}
 	}
 }
