@@ -13,7 +13,11 @@ This skill follows the README at https://github.com/chrisguidry/healthchecks-ope
   `healthchecks.guid.foo`;
 - the `healthchecks-operator` `ServiceAccount`, `ClusterRole`, and
   `ClusterRoleBinding`, and a `Role` for the leader `Lease`;
-- the `healthchecks-operator` `Deployment`, with two replicas.
+- the `healthchecks-operator` `Deployment`, with two replicas that must
+  run on different nodes, so a cluster of one node runs one and leaves
+  the other Pending;
+- the `healthchecks-operator` `PodDisruptionBudget`, which lets a drain
+  stop one replica at a time.
 
 The base sets the namespace `healthchecks-operator` and does not create
 it. Create it yourself, or set `namespace` in your own kustomization to
@@ -76,7 +80,7 @@ kubectl -n healthchecks-operator get lease healthchecks-operator
 
 One replica leads and does all the work. The other waits. When the
 leader stops for a rollout or a drain, the standby takes over in about
-two seconds. When the leader's node fails, the standby takes over about
+three seconds. When the leader's node fails, the standby takes over about
 fifteen seconds later. The `healthchecks_leader` metric is 1 on the
 leader, and each pod's log says when it waits, leads, or loses the
 `Lease`.

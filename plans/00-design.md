@@ -386,9 +386,10 @@ the same as the current one.
     `cronJob` check has no `Passing` until the operator reports its first
     finished run. A `ping` check has no `Passing`.
 
-The operator writes status only when something in it changes. A probe
-that gets the same result as the one before writes nothing, so a steady
-check makes no API writes.
+The operator writes status only when it differs from the copy the API
+server holds, as the watch last delivered it. A probe that gets the same
+result as the one before writes nothing, so a steady check makes no API
+writes, and a status that another writer changed is written back.
 
 `ClusterProject` status has a `Ready` condition, and the list of resolved
 channels.
@@ -430,10 +431,17 @@ every check for a while, such as a rollout that reboots each node.
   `name`. The resource is the plural an RBAC rule uses, so the operator needs
   no discovery request, and the installer writes the same word in the RBAC
   rule that grants the read.
-- The operator watches each resource a hold names, the way it watches its
-  own. The pass that first needs a resource lists it, so that pass reads a
-  full store. A list that fails leaves the hold unread, and the next pass
-  lists again.
+- The operator watches the one object each hold names, selected by
+  `metadata.name` in the object's namespace, so RBAC may grant it by
+  `resourceNames`. The watch's first list runs in the watch's own
+  goroutine with the watch's backoff, so a target the operator cannot list
+  never holds up a pass. Until that list lands, the `Holding` condition
+  stays as it was, so a restart during a rollout neither releases the hold
+  nor starts its `maxDuration` again, and a restart writes no status and
+  posts no Event for a hold that did not stand; the `maxDuration` still
+  ends a hold whose object is never read. A hold with no condition yet,
+  or one that says `TargetUnreadable`, says `TargetUnreadable`, with the
+  list's error once there is one.
 - A hold fails open. An object the operator cannot read or cannot find, a
   condition that does not match, and a hold past its `maxDuration` all pause
   nothing. After `maxDuration`, the `Holding` condition says `Expired` until
@@ -502,12 +510,18 @@ The operator follows the patterns of the liken-sh operators
   driver in its own directory in the same way.
 - No client-go and no controller-runtime. A small `net/http` Kubernetes
   client reads the in-cluster service account, lists, watches with
-  `?watch=true&allowWatchBookmarks=true`, and applies status. A dropped
-  watch or a `410 Gone` starts a new list.
+  `?watch=true&allowWatchBookmarks=true`, and applies status. A watch
+  that ends resumes from the last version it delivered, with no list.
+  Only a `410 Gone` lists again at once, and a second `410` in a row waits
+  out the backoff first. An `ERROR` event of another code, or an event
+  that does not decode, waits out the backoff and then lists. A watch
+  that ran for a second after its `200` resets the backoff, and one that
+  ended sooner grows it. These are the rules of liken's operator guide,
+  and `kube_watch_scenarios_test.go` runs each scenario in its table.
 - Each watch keeps its collection in a store in memory, keyed by
   namespace/name. The first list fills the store, and every list
-  replaces it, so an object deleted while a stream was down is gone
-  from it. `ADDED` and `MODIFIED` replace an object, and `DELETED`
+  replaces it, so an object deleted while the watch could not resume is
+  gone from it. `ADDED` and `MODIFIED` replace an object, and `DELETED`
   removes it, in the order the events arrive. A `BOOKMARK` moves only
   the resume version. Every store has its first list before the first
   pass.
@@ -517,15 +531,26 @@ The operator follows the patterns of the liken-sh operators
   decode stays out of the store, and an older copy under its key leaves
   it. The rest of the list or the stream applies. The operator writes one
   line for each object and error.
-- An event changes its store and then wakes the reconcile loop, through
-  a channel with a buffer of one. Each pass reads `ClusterProject`s,
+- Every event changes its store. It wakes the reconcile loop, through a
+  channel with a buffer of one, only when the trimmed object differs from
+  the stored copy in more than its `resourceVersion` and the status the
+  operator itself last wrote, so the echo of the operator's own status
+  write and a Job's count of ready pods wake nothing. A Job wakes the loop
+  only in a namespace that holds a `cronJob` `Check`, because no pass
+  reads the others. Each pass reads `ClusterProject`s,
   `Check`s, CronJobs, Jobs, and the operator's ConfigMaps from the stores, with no request to the
   API server, reconciles each one, and stops the probes of `Check`s that
   are gone. A 30-second ticker also wakes the loop, for the parts of a
   pass that time moves: a backoff that ends, and the heartbeat. A pass
   calls the Healthchecks management API only when a spec, a CronJob
   schedule, or a channel list changed.
-- A pass reads a Secret by name from the API server, and writes
+- A pass reads a `ClusterProject`'s API-key Secret by name from the API
+  server every 5 minutes, at once when the `ClusterProject`'s generation
+  changes, and on the pass after Healthchecks answers `401` to the key. A
+  watch would need list and watch on Secrets whose names each
+  `ClusterProject` chooses. A read that may clear, such as one that timed
+  out, keeps the key that worked, so a slow API server does not make
+  every `Check` of the project not Ready. The pass writes
   finalizers, status, and a `ping` check's ConfigMap there. A finalizer patch states the
   `resourceVersion` from the store. When the store is behind, the patch
   gets `409 Conflict`, and the pass leaves the object alone. The newer
@@ -540,19 +565,24 @@ The operator follows the patterns of the liken-sh operators
   requeue for each `Check`.
 - In steady state, the only outbound traffic is probes and pings.
 - Two replicas, with leader election. See "Leader election".
+- One Event for each transition of a condition, a new status or a new
+  reason, posted once the status that holds it is written. A recorder
+  writes them from its own goroutine, and at shutdown, after every pass
+  and probe has stopped, sends each one still queued.
 
 ### Leader election
 
-- The Deployment runs two replicas, placed on different nodes when the
-  cluster has more than one. One replica, the leader, runs the reconcile
+- The Deployment runs two replicas, which a required anti-affinity places
+  on different nodes, and a PodDisruptionBudget lets a drain stop one at a
+  time. One replica, the leader, runs the reconcile
   loop, the probes, and the heartbeat. The other waits as a standby, with
   no watches open.
 - The leader holds the `coordination.k8s.io/v1` Lease
   `healthchecks-operator` in the operator's namespace, and renews it every
-  2 seconds. The holder's identity is the pod's hostname and a random
+  3 seconds. The holder's identity is the pod's hostname and a random
   suffix, so a container that restarts in the same pod is a new
   candidate.
-- A standby tries for the Lease every 2 seconds. It takes the Lease when
+- A standby tries for the Lease every 3 seconds. It takes the Lease when
   the holder is empty, or when the Lease has not changed for 15 seconds
   by the standby's own clock, counted from when it first read the Lease
   as it is. A clock that disagrees with the leader's cannot make a Lease
@@ -569,7 +599,7 @@ The operator follows the patterns of the liken-sh operators
 - A leader that gets SIGTERM stops its work, then clears the holder with
   a patch at the version it last wrote, so a standby takes over on its
   next try instead of 15 seconds later. A rollout or a drain moves the
-  work in about 2 seconds.
+  work in about 3 seconds.
 - A new leader starts the way a restarted operator starts. Everything
   it needs is in `status` and in Healthchecks: see "Restarts and missed
   runs".
@@ -685,7 +715,8 @@ the message is the text Healthchecks returned.
 - client-go leader election, `tools/leaderelection/leaderelection.go` on
   `master`, <https://github.com/kubernetes/client-go/blob/master/tools/leaderelection/leaderelection.go>,
   read 2026-10-28: a lease duration of 15 seconds, a renew deadline of 10, and a
-  retry period of 2; expiry measured from when the candidate observed the
+  retry period of 2, which the operator lengthens to 3 to send fewer
+  requests; expiry measured from when the candidate observed the
   record, not from `renewTime`; and a release that clears the holder.
 - Lease, `coordination.k8s.io/v1`,
   <https://kubernetes.io/docs/reference/kubernetes-api/cluster-resources/lease-v1/>,

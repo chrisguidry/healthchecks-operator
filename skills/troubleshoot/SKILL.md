@@ -7,9 +7,12 @@ This skill follows the README at https://github.com/chrisguidry/healthchecks-ope
 
 # Troubleshoot
 
-The operator posts no Events. A fault in a `ClusterProject` or a `Check`
-is in a condition's reason and message, and in one line of the leader's
-log. A failed ping, a heartbeat fault, and a failed status write are in
+The operator posts one Event for each transition of a condition on a
+`ClusterProject` or a `Check`, a Warning when `Ready` or `Passing` turns
+`False`: `kubectl describe` lists the recent ones, and the Events of a
+`ClusterProject` are in the namespace `default`. A fault in a
+`ClusterProject` or a `Check` is in a condition's reason and message, and
+in one line of the leader's log. A failed ping, a heartbeat fault, and a failed status write are in
 the log only. Start with the overview; the `Reason` column shows only
 with `-o wide`:
 
@@ -25,7 +28,7 @@ projects first.
 
 | Reason | Fix |
 |---|---|
-| `SecretUnreadable` | The Secret `apiKeySecret` names, or its key, is missing from the operator's namespace. The operator reads Secrets from its own namespace only. |
+| `SecretUnreadable` | The Secret `apiKeySecret` names, or its key, is missing from the operator's namespace. The operator reads Secrets from its own namespace only. Reads back off from 5 seconds to 5 minutes; an edit to the ClusterProject reads it at once. |
 | `HealthchecksError` | Listing the project's channels failed; the message has the HTTP error. Check `spec.url`, and that the key is read-write and from this project. Retries back off from 5 seconds to 5 minutes. |
 | `ChannelNotFound` | A name in `spec.channels` matches no integration. Names match exactly. Make it in the web UI; the next pass, within 30 seconds, lists the channels again. |
 
@@ -127,3 +130,8 @@ The pods serve metrics on port 9200:
 | `healthchecks_pings_total` | Pings sent to Healthchecks, by ping and by whether Healthchecks accepted it. |
 | `healthchecks_watch_restarts_total` | Restarted watches on the Kubernetes API. A steady climb points at the API server or RBAC. |
 | `healthchecks_reconcile_duration_seconds`, `healthchecks_probe_duration_seconds` | How long each pass and each probe take. |
+| `healthchecks_passes_total` | Passes, by what woke them: `start`, `event` for a watched change, or `backstop`. |
+| `healthchecks_status_writes_total` | Status writes that landed, by kind. A steady operator writes none. |
+
+`/healthz` on port 9200 fails while a pod leads and has not yet listed
+what it watches, and the pod's readiness probe reads it.

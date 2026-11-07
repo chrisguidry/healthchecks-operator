@@ -7,7 +7,9 @@ package main
 // Check, and Healthchecks finds the check by its slug.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -299,12 +301,23 @@ func (c *controller) deleteBySlug(ctx context.Context, state *checkState, projec
 }
 
 // writeCheckStatus applies next when it differs from what the API
-// server holds. A steady check writes nothing.
+// server holds, as the store last heard it, so a steady check writes
+// nothing and a status that another writer changed is put right. A
+// Check the store does not hold yet compares with what the operator
+// wrote last.
 func (c *controller) writeCheckStatus(ctx context.Context, state *checkState, next CheckStatus) {
-	if reflect.DeepEqual(next, state.status) {
+	key := state.namespace + "/" + state.name
+	encoded, err := json.Marshal(next)
+	if err != nil {
 		return
 	}
-	err := c.client.applyStatus(ctx, checksResource, checkKind, state.namespace, state.name, next, nil)
+	stored, held := c.storedCheckStatus(key)
+	if held && bytes.Equal(stored, encoded) || !held && reflect.DeepEqual(next, state.status) {
+		state.status = next
+		return
+	}
+	c.watches[checksResource].store.wroteStatus(key, encoded)
+	err = c.client.applyStatus(ctx, checksResource, checkKind, state.namespace, state.name, next, nil)
 	if errors.Is(err, errNotFound) {
 		return
 	}
@@ -314,7 +327,23 @@ func (c *controller) writeCheckStatus(ctx context.Context, state *checkState, ne
 		return
 	}
 	c.log.clear(state.subject(), topicStatus)
+	c.readings.wroteStatus(checkKind)
+	c.postTransitions(objectReference{APIVersion: apiVersion, Kind: checkKind, Namespace: state.namespace, Name: state.name, UID: state.uid}, state.status.Conditions, next.Conditions)
 	state.status = next
+}
+
+// storedCheckStatus is the status of the Check under key as the store
+// holds it, encoded as the store's trimmed Check encodes it.
+func (c *controller) storedCheckStatus(key string) (json.RawMessage, bool) {
+	object, held := c.watches[checksResource].store.get(key)
+	if !held {
+		return nil, false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(object, &fields) != nil {
+		return nil, false
+	}
+	return fields["status"], true
 }
 
 func checkReady(v verdict, generation int64, now time.Time) Condition {

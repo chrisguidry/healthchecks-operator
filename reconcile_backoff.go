@@ -1,11 +1,12 @@
 package main
 
-// A failed call to Healthchecks puts its object on a backoff. Without
-// it, a failure feeds itself: the failure changes the Ready message,
-// the status write wakes a watch, and the watch starts a pass at once,
-// which calls Healthchecks again. During the backoff a pass skips the
-// object, keeps its last verdict, and writes nothing. The backstop
-// ticker reaches the object again once the delay has passed.
+// A failed call to Healthchecks, or a failed read of a project's API
+// key, puts its object on a backoff. Without it, a failure feeds
+// itself: the failure changes the Ready message, the status write wakes
+// a watch, and the watch starts a pass at once, which calls again.
+// During the backoff a pass skips the object, keeps its last verdict,
+// and writes nothing. The backstop ticker reaches the object again once
+// the delay has passed.
 
 import "time"
 

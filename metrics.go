@@ -8,6 +8,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -38,6 +39,10 @@ var watchedResources = []string{"clusterprojects", "checks", "cronjobs", "jobs"}
 
 type metrics struct {
 	registry *prometheus.Registry
+	// leading and synced are what /healthz answers from: whether this
+	// replica leads, and whether its watches have all listed.
+	leading atomic.Bool
+	synced  atomic.Bool
 
 	passDuration    prometheus.Histogram
 	reconcileErrors *prometheus.CounterVec
@@ -46,6 +51,8 @@ type metrics struct {
 	probes          *prometheus.CounterVec
 	pings           *prometheus.CounterVec
 	leader          prometheus.Gauge
+	passes          *prometheus.CounterVec
+	statusWrites    *prometheus.CounterVec
 }
 
 func newMetrics(version string) *metrics {
@@ -65,7 +72,7 @@ func newMetrics(version string) *metrics {
 		}, []string{"kind"}),
 		watchRestarts: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: metricsPrefix + "watch_restarts_total",
-			Help: "Watches that ended and opened again after a list, by resource.",
+			Help: "Watches that ended and opened again, by resource.",
 		}, []string{"resource"}),
 		probeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    metricsPrefix + "probe_duration_seconds",
@@ -93,13 +100,21 @@ func newMetrics(version string) *metrics {
 		Help: "The release this operator runs, as a label on a gauge that is always 1.",
 	}, []string{"version"})
 	buildInfo.WithLabelValues(version).Set(1)
+	m.passes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: metricsPrefix + "passes_total",
+		Help: "Reconcile passes, by what woke them: start, event, or backstop.",
+	}, []string{"cause"})
+	m.statusWrites = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: metricsPrefix + "status_writes_total",
+		Help: "Status writes that landed, by kind. A steady operator writes none.",
+	}, []string{"kind"})
 
 	m.registry.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		buildInfo,
 		m.passDuration, m.reconcileErrors, m.watchRestarts,
-		m.probeDuration, m.probes, m.pings, m.leader,
+		m.probeDuration, m.probes, m.pings, m.leader, m.passes, m.statusWrites,
 	)
 
 	// Every series starts at zero on the first scrape. Prometheus
@@ -107,6 +122,10 @@ func newMetrics(version string) *metrics {
 	// appears at 1 has no earlier reading.
 	for _, kind := range []string{clusterProjectKind, checkKind} {
 		m.reconcileErrors.WithLabelValues(kind)
+		m.statusWrites.WithLabelValues(kind)
+	}
+	for _, cause := range []string{passStart, passEvent, passBackstop} {
+		m.passes.WithLabelValues(cause)
 	}
 	for _, resource := range watchedResources {
 		m.watchRestarts.WithLabelValues(resource)
@@ -153,7 +172,25 @@ func (m *metrics) observePing(ping string, err error) {
 	m.pings.WithLabelValues(ping, outcomeLabel(err == nil, "ok", "error")).Inc()
 }
 
+// The causes of a pass, by the label that counts them.
+const (
+	passStart    = "start"
+	passEvent    = "event"
+	passBackstop = "backstop"
+)
+
+// wroteStatus counts one status write of kind that landed.
+func (m *metrics) wroteStatus(kind string) {
+	m.statusWrites.WithLabelValues(kind).Inc()
+}
+
+// setSynced records whether the leader's watches have all listed.
+func (m *metrics) setSynced(synced bool) {
+	m.synced.Store(synced)
+}
+
 func (m *metrics) setLeader(leading bool) {
+	m.leading.Store(leading)
 	if leading {
 		m.leader.Set(1)
 	} else {
@@ -176,9 +213,10 @@ func (m *metrics) handler() http.Handler {
 	})
 }
 
-// serve listens on address and serves /metrics until ctx ends. It
-// listens before it returns, so a port that is in use is an error for
-// the caller, and it returns the address it listens on.
+// serve listens on address and serves /metrics and /healthz until ctx
+// ends. /healthz fails while this replica leads and its watches have not
+// all listed. It listens before it returns, so a port that is in use is
+// an error for the caller, and it returns the address it listens on.
 func (m *metrics) serve(ctx context.Context, address string) (net.Addr, error) {
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
@@ -186,6 +224,11 @@ func (m *metrics) serve(ctx context.Context, address string) (net.Addr, error) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", m.handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if m.leading.Load() && !m.synced.Load() {
+			http.Error(w, "this replica leads, and its watches have not all listed", http.StatusServiceUnavailable)
+		}
+	})
 	// A client that connects and sends no headers holds a goroutine
 	// until this timeout ends it.
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}

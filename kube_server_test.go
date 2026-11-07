@@ -85,23 +85,27 @@ type fakeKube struct {
 	// refusals holds the status code for each "METHOD path" a test
 	// refuses.
 	refusals map[string]int
-	events   []fakeEvent
-	log      []fakeRequest
-	changed  chan struct{}
-	dropping chan struct{}
+	// refusalsLeft holds how many more times a refusal answers, for a
+	// refusal that ends by itself.
+	refusalsLeft map[string]int
+	events       []fakeEvent
+	log          []fakeRequest
+	changed      chan struct{}
+	dropping     chan struct{}
 }
 
 func startFakeKube(t *testing.T) *fakeKube {
 	t.Helper()
 	f := &fakeKube{
-		t:        t,
-		now:      time.Now,
-		objects:  map[fakeKey]map[string]any{},
-		owners:   map[fakeKey]map[string][][]string{},
-		applied:  map[fakeKey]map[string][][]string{},
-		refusals: map[string]int{},
-		changed:  make(chan struct{}),
-		dropping: make(chan struct{}),
+		t:            t,
+		now:          time.Now,
+		objects:      map[fakeKey]map[string]any{},
+		owners:       map[fakeKey]map[string][][]string{},
+		applied:      map[fakeKey]map[string][][]string{},
+		refusals:     map[string]int{},
+		refusalsLeft: map[string]int{},
+		changed:      make(chan struct{}),
+		dropping:     make(chan struct{}),
 	}
 	server := httptest.NewServer(f)
 	// Open watches end first, because Close waits for every handler.
@@ -252,9 +256,9 @@ func (f *fakeKube) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case !parsed:
 		writeKubeStatus(w, http.StatusNotFound, "the fake API server has no route for "+r.URL.Path)
 	case r.Method == http.MethodGet && key.name == "" && r.URL.Query().Get("watch") == "true":
-		f.serveWatch(w, r, key, parseSelector(r.URL.Query().Get("labelSelector")))
+		f.serveWatch(w, r, key, parseRequestSelector(r.URL.Query().Get("labelSelector"), r.URL.Query().Get("fieldSelector")))
 	case r.Method == http.MethodGet && key.name == "":
-		f.serveList(w, key, parseSelector(r.URL.Query().Get("labelSelector")))
+		f.serveList(w, key, parseRequestSelector(r.URL.Query().Get("labelSelector"), r.URL.Query().Get("fieldSelector")))
 	case r.Method == http.MethodPost && key.name == "" && !status:
 		f.serveCreate(w, key, body)
 	case r.Method == http.MethodDelete && !status:

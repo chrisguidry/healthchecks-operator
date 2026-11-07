@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 )
 
 // Client reaches one project on one Healthchecks instance. Every
@@ -16,6 +17,14 @@ type Client struct {
 	baseURL string
 	apiKey  string
 	http    *http.Client
+	// refused is set once Healthchecks answers 401 to this client's key.
+	refused atomic.Bool
+}
+
+// KeyRefused reports whether Healthchecks has answered 401 to any call
+// this client made, which says its key was rotated or revoked.
+func (c *Client) KeyRefused() bool {
+	return c.refused.Load()
 }
 
 // NewClient builds a Client for one project. baseURL is the instance's
@@ -68,6 +77,9 @@ func (c *Client) request(ctx context.Context, method, path string, body []byte) 
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		c.refused.Store(true)
+	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return 0, nil, err

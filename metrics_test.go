@@ -84,3 +84,33 @@ func TestMetricsServeFailsOnAPortInUse(t *testing.T) {
 
 	mustMatch(t, err != nil, true)
 }
+
+func TestHealthzFailsUntilTheLeadersWatchesHaveListed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		leading bool
+		synced  bool
+		code    int
+	}{
+		{"a standby", false, false, http.StatusOK},
+		{"a leader that is still listing", true, false, http.StatusServiceUnavailable},
+		{"a leader whose watches listed", true, true, http.StatusOK},
+	}
+	for _, one := range cases {
+		t.Run(one.name, func(t *testing.T) {
+			t.Parallel()
+			m := newMetrics("dev")
+			m.setLeader(one.leading)
+			m.setSynced(one.synced)
+			address, err := m.serve(t.Context(), "127.0.0.1:0")
+			mustSucceed(t, err)
+
+			resp, err := http.Get("http://" + address.String() + "/healthz")
+			mustSucceed(t, err)
+			_ = resp.Body.Close()
+
+			mustMatch(t, resp.StatusCode, one.code)
+		})
+	}
+}

@@ -79,7 +79,7 @@ what failed:
 
 | Reason | Meaning | Fix |
 |---|---|---|
-| `SecretUnreadable` | The Secret or its key is missing from the operator's namespace. | Create the Secret in that namespace with the key `apiKeySecret.key` names. |
+| `SecretUnreadable` | The Secret or its key is missing from the operator's namespace. | Create the Secret in that namespace with the key `apiKeySecret.key` names. The operator reads it again with a backoff from 5 seconds to 5 minutes, or at once after an edit to the ClusterProject. |
 | `HealthchecksError` | The call to list channels failed: a wrong URL, a rejected key, or an instance that does not answer. The message has the error. | Check `url`, and that the key is read-write and belongs to this project. The operator retries with a backoff from 5 seconds to 5 minutes. |
 | `ChannelNotFound` | A name in `channels` matches no integration. The message names it. | Make the integration in the web UI, or fix the name. The operator lists the channels again on its next pass, within 30 seconds. |
 
@@ -90,9 +90,16 @@ project is `Ready`.
 ## Rotate the key
 
 Make a new key in the project's settings, write it into the same Secret,
-and then revoke the old key. The operator reads the Secret again on its
-next pass. No `Check` changes, because checks are found by slug, not by
-key.
+and then revoke the old key. The operator reads the Secret every 5
+minutes, at once when the `ClusterProject` changes, and on the next pass
+after Healthchecks refuses the old key, so revoking the old key moves
+the operator to the new one. No `Check` changes, because checks are
+found by slug, not by key.
+
+A read of the Secret that fails for a reason that may clear, such as an
+API server that does not answer in time, keeps the key that worked, and
+the operator logs `keeping the API key that worked`. A Secret or a key
+that is gone makes the project `SecretUnreadable` on the next read.
 
 ## Next
 

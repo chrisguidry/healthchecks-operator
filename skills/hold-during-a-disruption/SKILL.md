@@ -55,9 +55,11 @@ longer than the work ever takes.
 ## Grant read access
 
 The operator's `ClusterRole` does not cover the object a hold names.
-Grant it with a `ClusterRole`, even for a namespaced object: the
-operator lists and watches the resource across every namespace, so a
-`Role` is not enough. Put the operator's namespace in the subject:
+The operator lists and watches only that object, selected by
+`metadata.name` in the object's namespace, so a rule may name it in
+`resourceNames`, and for a namespaced object a `Role` in its namespace
+is enough. A `ClusterRole` covers every case. Put the operator's
+namespace in the subject:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1

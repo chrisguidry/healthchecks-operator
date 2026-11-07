@@ -20,11 +20,33 @@ func parseSelector(selector string) map[string]string {
 	return wanted
 }
 
-// selected reports whether the object carries every label that
-// wanted asks for.
+// fieldPrefix marks a term of wanted that a field selector asked for,
+// such as metadata.name, apart from a label of the same name.
+const fieldPrefix = "\x00"
+
+// parseRequestSelector reads a request's label selector and its field
+// selector into one set of terms. The fake reads the fields of
+// metadata only, as the API server does for most resources.
+func parseRequestSelector(labels, fields string) map[string]string {
+	wanted := parseSelector(labels)
+	for name, value := range parseSelector(fields) {
+		wanted[fieldPrefix+name] = value
+	}
+	return wanted
+}
+
+// selected reports whether the object carries every label and field
+// that wanted asks for.
 func selected(wanted map[string]string, object map[string]any) bool {
-	labels, _ := metadataOf(object)["labels"].(map[string]any)
+	meta := metadataOf(object)
+	labels, _ := meta["labels"].(map[string]any)
 	for name, value := range wanted {
+		if field, ok := strings.CutPrefix(name, fieldPrefix+"metadata."); ok {
+			if stringAt(meta, field) != value {
+				return false
+			}
+			continue
+		}
 		if labels[name] != value {
 			return false
 		}

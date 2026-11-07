@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -30,7 +31,11 @@ const (
 type projectState struct {
 	url    string
 	apiKey string
-	client *healthchecks.Client
+	// keyReadAt is when the key was last read, and keyGeneration the
+	// ClusterProject's generation then.
+	keyReadAt     time.Time
+	keyGeneration int64
+	client        *healthchecks.Client
 	// channels is every channel in the project, listed by client. It
 	// is valid only while listed is true.
 	channels []healthchecks.Channel
@@ -40,6 +45,9 @@ type projectState struct {
 	relist bool
 	// backoff spaces out the calls to Healthchecks after one fails.
 	backoff backoff
+	// keyFailedGeneration is the ClusterProject's generation when a read
+	// of its key failed and started the backoff, and zero otherwise.
+	keyFailedGeneration int64
 	// resolved is spec.channels, resolved to IDs.
 	resolved []ResolvedChannel
 	verdict  verdict
@@ -81,6 +89,12 @@ func (c *controller) reconcileProject(ctx context.Context, project *ClusterProje
 		state = &projectState{}
 		c.projects[name] = state
 	}
+	// A person fixes a Secret the project names wrongly by editing the
+	// project, so the edit ends the backoff the failed read started.
+	if state.keyFailedGeneration != 0 && state.keyFailedGeneration != project.Metadata.Generation {
+		state.backoff.succeeded()
+		state.keyFailedGeneration = 0
+	}
 	if state.backoff.waiting(c.now()) {
 		return
 	}
@@ -103,11 +117,16 @@ func (c *controller) reconcileProject(ctx context.Context, project *ClusterProje
 	}
 	status.Conditions = c.reconcileHold(project, state, status.Conditions)
 	if !reflect.DeepEqual(status, project.Status) {
+		if encoded, err := json.Marshal(status); err == nil {
+			c.watches[clusterProjectsResource].store.wroteStatus("/"+name, encoded)
+		}
 		if err := c.client.applyStatus(ctx, clusterProjectsResource, clusterProjectKind, "", name, status, nil); err != nil {
 			c.log.fault("clusterproject "+name, topicStatus, "writing status: "+errorText(err))
 			c.readings.reconcileFailed(clusterProjectKind)
 			return
 		}
+		c.readings.wroteStatus(clusterProjectKind)
+		c.postTransitions(referenceTo(clusterProjectKind, project.Metadata), project.Status.Conditions, status.Conditions)
 	}
 	c.note("clusterproject "+name, clusterProjectKind, state.verdict)
 }
@@ -137,16 +156,53 @@ func (c *controller) reconcileHold(project *ClusterProject, state *projectState,
 	return conditions
 }
 
-// connectProject reads the API key and lists the channels when the
-// client is new or a Check asked for a new list.
-func (c *controller) connectProject(ctx context.Context, project *ClusterProject, state *projectState) verdict {
+// keyReadPeriod is how often the operator reads a project's API key
+// again with nothing to prompt it. The key's Secret is named by each
+// ClusterProject, so following it with a watch would need list and
+// watch on Secrets of names RBAC cannot know in advance. A key that
+// Healthchecks refuses, or a change to the ClusterProject, reads it at
+// once.
+const keyReadPeriod = 5 * time.Minute
+
+// readKey returns the project's API key, read again when it is due. A
+// read that fails for a reason that may clear, such as an API server
+// that is slow to answer, keeps the key that last worked, so one failed
+// read does not make every Check of the project not Ready.
+func (c *controller) readKey(ctx context.Context, project *ClusterProject, state *projectState) (string, error) {
+	now := c.now()
+	fresh := state.apiKey != "" && state.keyGeneration == project.Metadata.Generation &&
+		now.Sub(state.keyReadAt) < keyReadPeriod && (state.client == nil || !state.client.KeyRefused())
+	if fresh {
+		return state.apiKey, nil
+	}
 	ref := project.Spec.APIKeySecret
 	key, err := c.client.secretValue(ctx, c.namespace, ref.Name, ref.Key)
 	if err != nil {
-		state.client, state.listed = nil, false
+		if transient(err) && state.apiKey != "" && state.keyGeneration == project.Metadata.Generation {
+			c.log.fault("clusterproject "+project.Metadata.Name, topicKey, "keeping the API key that worked: "+errorText(err))
+			return state.apiKey, nil
+		}
+		return "", err
+	}
+	c.log.clear("clusterproject "+project.Metadata.Name, topicKey)
+	state.keyReadAt, state.keyGeneration = now, project.Metadata.Generation
+	return key, nil
+}
+
+// connectProject reads the API key and lists the channels when the
+// client is new or a Check asked for a new list.
+func (c *controller) connectProject(ctx context.Context, project *ClusterProject, state *projectState) verdict {
+	key, err := c.readKey(ctx, project, state)
+	if err != nil {
+		// No event announces a Secret that appears or changes, so a pass
+		// would read it again every time without the backoff.
+		state.client, state.listed, state.apiKey = nil, false, ""
+		state.backoff.failed(c.now())
+		state.keyFailedGeneration = project.Metadata.Generation
 		return verdict{reasonSecretUnreadable, errorText(err)}
 	}
-	if state.client == nil || state.url != project.Spec.URL || state.apiKey != key {
+	state.keyFailedGeneration = 0
+	if state.client == nil || state.url != project.Spec.URL || state.apiKey != key || state.client.KeyRefused() {
 		state.client = healthchecks.NewClient(project.Spec.URL, key, c.http)
 		state.url, state.apiKey, state.listed = project.Spec.URL, key, false
 	}
