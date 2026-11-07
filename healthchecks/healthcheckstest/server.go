@@ -25,9 +25,9 @@ import (
 // Server is a fake Healthchecks instance holding one project.
 type Server struct {
 	server *httptest.Server
-	apiKey string
 
 	mu       sync.Mutex
+	apiKey   string
 	checks   map[string]*storedCheck // by slug
 	byUUID   map[string]*storedCheck // by uuid
 	channels []storedChannel
@@ -201,8 +201,19 @@ func splitNonEmpty(s, sep string) []string {
 	return strings.Split(s, sep)
 }
 
+// SetAPIKey replaces the project's key, as a person who rotates it in
+// Healthchecks does. A request with the old key gets 401.
+func (s *Server) SetAPIKey(apiKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.apiKey = apiKey
+}
+
 func (s *Server) authorized(w http.ResponseWriter, r *http.Request) bool {
-	if r.Header.Get("X-Api-Key") != s.apiKey {
+	s.mu.Lock()
+	apiKey := s.apiKey
+	s.mu.Unlock()
+	if r.Header.Get("X-Api-Key") != apiKey {
 		writeError(w, http.StatusUnauthorized, "wrong api key")
 		return false
 	}

@@ -537,7 +537,13 @@ The operator follows the patterns of the liken-sh operators
   pass that time moves: a backoff that ends, and the heartbeat. A pass
   calls the Healthchecks management API only when a spec, a CronJob
   schedule, or a channel list changed.
-- A pass reads a Secret by name from the API server, and writes
+- A pass reads a `ClusterProject`'s API-key Secret by name from the API
+  server every 5 minutes, at once when the `ClusterProject`'s generation
+  changes, and on the pass after Healthchecks answers `401` to the key. A
+  watch would need list and watch on Secrets whose names each
+  `ClusterProject` chooses. A read that may clear, such as one that timed
+  out, keeps the key that worked, so a slow API server does not make
+  every `Check` of the project not Ready. The pass writes
   finalizers, status, and a `ping` check's ConfigMap there. A finalizer patch states the
   `resourceVersion` from the store. When the store is behind, the patch
   gets `409 Conflict`, and the pass leaves the object alone. The newer

@@ -57,7 +57,10 @@ func TestADeletedCheckKeepsItsFinalizerWhileItsProjectCannotDeleteIt(t *testing.
 		},
 		{
 			"failing",
-			func(h *harness) { h.api.delete(secretsResource, operatorNamespace, "internal-healthchecks") },
+			func(h *harness) {
+				h.api.delete(secretsResource, operatorNamespace, "internal-healthchecks")
+				h.clock.advance(keyReadPeriod)
+			},
 			"ProjectNotReady",
 			`ClusterProject internal is not ready, so the check stays in Healthchecks and the finalizer stays: reading key "api-key" of Secret healthchecks-operator/internal-healthchecks: not found`,
 		},

@@ -29,6 +29,7 @@ const (
 	topicReconcile = ""
 	topicPing      = "ping"
 	topicStatus    = "status"
+	topicKey       = "key"
 )
 
 func newLineLog(out io.Writer) *lineLog {
