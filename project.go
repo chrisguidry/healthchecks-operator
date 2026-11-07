@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -103,6 +104,9 @@ func (c *controller) reconcileProject(ctx context.Context, project *ClusterProje
 	}
 	status.Conditions = c.reconcileHold(project, state, status.Conditions)
 	if !reflect.DeepEqual(status, project.Status) {
+		if encoded, err := json.Marshal(status); err == nil {
+			c.watches[clusterProjectsResource].store.wroteStatus("/"+name, encoded)
+		}
 		if err := c.client.applyStatus(ctx, clusterProjectsResource, clusterProjectKind, "", name, status, nil); err != nil {
 			c.log.fault("clusterproject "+name, topicStatus, "writing status: "+errorText(err))
 			c.readings.reconcileFailed(clusterProjectKind)

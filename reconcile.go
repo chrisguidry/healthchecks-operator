@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chrisguidry/healthchecks-operator/healthchecks"
@@ -95,6 +96,11 @@ type controller struct {
 	targetFaults   map[kubeResource]string
 	targetsRunning sync.WaitGroup
 
+	// jobNamespaces holds the namespaces with a cronJob Check, as the
+	// last pass read them, or nil before the first pass. The Job watch's
+	// goroutine reads it.
+	jobNamespaces atomic.Pointer[map[string]bool]
+
 	// mutex guards the map of checks, which the probe schedule's
 	// goroutine reads to report each result. Each checkState has its
 	// own mutex for its fields.
@@ -122,6 +128,9 @@ func newController(config settings, client *kubeClient, readings *metrics, now f
 	for _, resource := range watchedCollections {
 		c.watches[resource] = newCollectionWatch(client, resource, "", selectors[resource], trims[resource], c.wake, readings.watchRestarted(resource.Resource))
 	}
+	// The Job watch holds every Job in the cluster, and a pass reads only
+	// the Jobs in a namespace with a cronJob Check, so only those wake it.
+	c.watches[jobsResource].store.wakeOnly(c.namespaceReportsJobs)
 	c.schedule = newProbeSchedule(now, c.report)
 	if config.heartbeatProject != "" {
 		c.heartbeat = newHeartbeat(config.heartbeatProject, config.heartbeatSlug, c)
@@ -259,6 +268,7 @@ func (c *controller) pass(ctx context.Context) {
 	}
 	c.log.clear("reading the cluster", topicReconcile)
 
+	c.noteJobNamespaces(w.checks)
 	c.reconcileProjects(ctx, w.projects)
 	if c.heartbeat != nil {
 		c.heartbeat.ensure(ctx, c.projects)
@@ -273,6 +283,28 @@ func (c *controller) pass(ctx context.Context) {
 	if c.heartbeat != nil {
 		c.heartbeat.passed(c.now())
 	}
+}
+
+// noteJobNamespaces records the namespaces whose Jobs a pass reads.
+func (c *controller) noteJobNamespaces(checks []Check) {
+	namespaces := map[string]bool{}
+	for _, check := range checks {
+		if check.Spec.CronJob != nil {
+			namespaces[check.Metadata.Namespace] = true
+		}
+	}
+	c.jobNamespaces.Store(&namespaces)
+}
+
+// namespaceReportsJobs reports whether a change to the Job under key
+// may matter to a pass. Before the first pass every Job may.
+func (c *controller) namespaceReportsJobs(key string) bool {
+	namespaces := c.jobNamespaces.Load()
+	if namespaces == nil {
+		return true
+	}
+	namespace, _, _ := strings.Cut(key, "/")
+	return (*namespaces)[namespace]
 }
 
 // readyCondition is the condition type that says whether a

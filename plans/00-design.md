@@ -386,9 +386,10 @@ the same as the current one.
     `cronJob` check has no `Passing` until the operator reports its first
     finished run. A `ping` check has no `Passing`.
 
-The operator writes status only when something in it changes. A probe
-that gets the same result as the one before writes nothing, so a steady
-check makes no API writes.
+The operator writes status only when it differs from the copy the API
+server holds, as the watch last delivered it. A probe that gets the same
+result as the one before writes nothing, so a steady check makes no API
+writes, and a status that another writer changed is written back.
 
 `ClusterProject` status has a `Ready` condition, and the list of resolved
 channels.
@@ -502,12 +503,18 @@ The operator follows the patterns of the liken-sh operators
   driver in its own directory in the same way.
 - No client-go and no controller-runtime. A small `net/http` Kubernetes
   client reads the in-cluster service account, lists, watches with
-  `?watch=true&allowWatchBookmarks=true`, and applies status. A dropped
-  watch or a `410 Gone` starts a new list.
+  `?watch=true&allowWatchBookmarks=true`, and applies status. A watch
+  that ends resumes from the last version it delivered, with no list.
+  Only a `410 Gone` lists again at once, and a second `410` in a row waits
+  out the backoff first. An `ERROR` event of another code, or an event
+  that does not decode, waits out the backoff and then lists. A watch
+  that ran for a second after its `200` resets the backoff, and one that
+  ended sooner grows it. These are the rules of liken's operator guide,
+  and `kube_watch_scenarios_test.go` runs each scenario in its table.
 - Each watch keeps its collection in a store in memory, keyed by
   namespace/name. The first list fills the store, and every list
-  replaces it, so an object deleted while a stream was down is gone
-  from it. `ADDED` and `MODIFIED` replace an object, and `DELETED`
+  replaces it, so an object deleted while the watch could not resume is
+  gone from it. `ADDED` and `MODIFIED` replace an object, and `DELETED`
   removes it, in the order the events arrive. A `BOOKMARK` moves only
   the resume version. Every store has its first list before the first
   pass.
@@ -517,8 +524,13 @@ The operator follows the patterns of the liken-sh operators
   decode stays out of the store, and an older copy under its key leaves
   it. The rest of the list or the stream applies. The operator writes one
   line for each object and error.
-- An event changes its store and then wakes the reconcile loop, through
-  a channel with a buffer of one. Each pass reads `ClusterProject`s,
+- Every event changes its store. It wakes the reconcile loop, through a
+  channel with a buffer of one, only when the trimmed object differs from
+  the stored copy in more than its `resourceVersion` and the status the
+  operator itself last wrote, so the echo of the operator's own status
+  write and a Job's count of ready pods wake nothing. A Job wakes the loop
+  only in a namespace that holds a `cronJob` `Check`, because no pass
+  reads the others. Each pass reads `ClusterProject`s,
   `Check`s, CronJobs, Jobs, and the operator's ConfigMaps from the stores, with no request to the
   API server, reconciles each one, and stops the probes of `Check`s that
   are gone. A 30-second ticker also wakes the loop, for the parts of a
