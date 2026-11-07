@@ -90,3 +90,21 @@ func TestAStatusThatAnotherWriterChangedIsPutRight(t *testing.T) {
 
 	mustMatch(t, h.check("example", "database-backup").Status.Slug, slug)
 }
+
+// A pass records the namespaces whose Jobs it reads as it reads the
+// Checks, before it reads the Jobs, so a Job that lands just after the
+// pass read them, in the namespace of a namespace's first cronJob Check,
+// wakes the next pass.
+func TestAJobAfterTheReadOfANewCronJobCheckWakes(t *testing.T) {
+	h := startHarness(t)
+	h.settle()
+	h.api.create(cronJobsResource, backupCronJob())
+	h.api.create(checksResource, backupCheck())
+	h.woke()
+	_, err := h.c.read()
+	mustSucceed(t, err)
+
+	h.startRun("backup-1")
+
+	mustMatch(t, h.woke(), true)
+}

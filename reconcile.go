@@ -255,6 +255,10 @@ func (c *controller) read() (*world, error) {
 	if w.checks, err = decodeSnapshot[Check](c.watches[checksResource].store); err != nil {
 		return nil, fmt.Errorf("decoding %s: %w", checksResource, err)
 	}
+	// The Job namespaces come from these Checks before the Jobs are
+	// read, so a Job event that the Jobs' snapshot misses lands after
+	// its namespace joined the set, and wakes the next pass.
+	c.noteJobNamespaces(w.checks)
 	cronJobs, err := decodeSnapshot[batchCronJob](c.watches[cronJobsResource].store)
 	if err != nil {
 		return nil, fmt.Errorf("decoding %s: %w", cronJobsResource, err)
@@ -299,7 +303,6 @@ func (c *controller) pass(ctx context.Context) {
 	}
 	c.log.clear("reading the cluster", topicReconcile)
 
-	c.noteJobNamespaces(w.checks)
 	c.reconcileProjects(ctx, w.projects)
 	if c.heartbeat != nil {
 		c.heartbeat.ensure(ctx, c.projects)
