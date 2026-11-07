@@ -45,6 +45,9 @@ type projectState struct {
 	relist bool
 	// backoff spaces out the calls to Healthchecks after one fails.
 	backoff backoff
+	// keyFailedGeneration is the ClusterProject's generation when a read
+	// of its key failed and started the backoff, and zero otherwise.
+	keyFailedGeneration int64
 	// resolved is spec.channels, resolved to IDs.
 	resolved []ResolvedChannel
 	verdict  verdict
@@ -85,6 +88,12 @@ func (c *controller) reconcileProject(ctx context.Context, project *ClusterProje
 	if !held {
 		state = &projectState{}
 		c.projects[name] = state
+	}
+	// A person fixes a Secret the project names wrongly by editing the
+	// project, so the edit ends the backoff the failed read started.
+	if state.keyFailedGeneration != 0 && state.keyFailedGeneration != project.Metadata.Generation {
+		state.backoff.succeeded()
+		state.keyFailedGeneration = 0
 	}
 	if state.backoff.waiting(c.now()) {
 		return
@@ -189,8 +198,10 @@ func (c *controller) connectProject(ctx context.Context, project *ClusterProject
 		// would read it again every time without the backoff.
 		state.client, state.listed, state.apiKey = nil, false, ""
 		state.backoff.failed(c.now())
+		state.keyFailedGeneration = project.Metadata.Generation
 		return verdict{reasonSecretUnreadable, errorText(err)}
 	}
+	state.keyFailedGeneration = 0
 	if state.client == nil || state.url != project.Spec.URL || state.apiKey != key || state.client.KeyRefused() {
 		state.client = healthchecks.NewClient(project.Spec.URL, key, c.http)
 		state.url, state.apiKey, state.listed = project.Spec.URL, key, false

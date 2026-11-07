@@ -79,7 +79,7 @@ what failed:
 
 | Reason | Meaning | Fix |
 |---|---|---|
-| `SecretUnreadable` | The Secret or its key is missing from the operator's namespace. | Create the Secret in that namespace with the key `apiKeySecret.key` names. The operator reads it again with a backoff from 5 seconds to 5 minutes. |
+| `SecretUnreadable` | The Secret or its key is missing from the operator's namespace. | Create the Secret in that namespace with the key `apiKeySecret.key` names. The operator reads it again with a backoff from 5 seconds to 5 minutes, or at once after an edit to the ClusterProject. |
 | `HealthchecksError` | The call to list channels failed: a wrong URL, a rejected key, or an instance that does not answer. The message has the error. | Check `url`, and that the key is read-write and belongs to this project. The operator retries with a backoff from 5 seconds to 5 minutes. |
 | `ChannelNotFound` | A name in `channels` matches no integration. The message names it. | Make the integration in the web UI, or fix the name. The operator lists the channels again on its next pass, within 30 seconds. |
 

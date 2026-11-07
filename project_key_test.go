@@ -123,3 +123,21 @@ func TestASecretThatCannotBeReadIsReadAgainOnlyAfterTheBackoff(t *testing.T) {
 	mustMatch(t, h.keyReads(), reads+1)
 	mustMatch(t, h.projectReady().Reason, reasonSecretUnreadable)
 }
+
+// An edit to the ClusterProject is how a person fixes the Secret it
+// names, so an edit reads the key at once, backoff or not.
+func TestAnEditToTheProjectReadsItsSecretDuringTheBackoff(t *testing.T) {
+	h := startHarness(t)
+	h.pass()
+	h.api.delete(secretsResource, operatorNamespace, "internal-healthchecks")
+	h.clock.advance(keyReadPeriod)
+	h.pass()
+	reads := h.keyReads()
+
+	h.api.update(clusterProjectsResource, "", "internal", func(object map[string]any) {
+		object["spec"].(map[string]any)["channels"] = []any{"Email"}
+	})
+	h.pass()
+
+	mustMatch(t, h.keyReads(), reads+1)
+}
