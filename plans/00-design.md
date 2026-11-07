@@ -435,11 +435,13 @@ every check for a while, such as a rollout that reboots each node.
   `metadata.name` in the object's namespace, so RBAC may grant it by
   `resourceNames`. The watch's first list runs in the watch's own
   goroutine with the watch's backoff, so a target the operator cannot list
-  never holds up a pass. Until that list lands, a hold that stands, or
-  one that expired, stays as it was, so a restart during a rollout neither
-  releases the hold nor starts its `maxDuration` again; the `maxDuration`
-  still ends a hold whose object is never read. Any other hold says
-  `TargetUnreadable`, with the list's error once there is one.
+  never holds up a pass. Until that list lands, the `Holding` condition
+  stays as it was, so a restart during a rollout neither releases the hold
+  nor starts its `maxDuration` again, and a restart writes no status and
+  posts no Event for a hold that did not stand; the `maxDuration` still
+  ends a hold whose object is never read. A hold with no condition yet,
+  or one that says `TargetUnreadable`, says `TargetUnreadable`, with the
+  list's error once there is one.
 - A hold fails open. An object the operator cannot read or cannot find, a
   condition that does not match, and a hold past its `maxDuration` all pause
   nothing. After `maxDuration`, the `Holding` condition says `Expired` until

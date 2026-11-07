@@ -172,12 +172,15 @@ func (c *controller) holdingVerdict(hold *Hold, previous Condition, generation i
 	}
 	object, read, reason, message := c.heldObject(hold.While)
 	holding := previous.Status == ConditionTrue
-	if !read && (holding || previous.Reason == reasonExpired) {
-		// The watch has not read the object yet, as after a restart, so
-		// a hold that stands, or one that expired, stays as it was: a
-		// restart during a rollout neither releases the hold nor starts
-		// its maxDuration again. The maxDuration still ends a hold the
-		// watch never reads.
+	if !read && previous.Type != "" && previous.Reason != reasonTargetUnreadable {
+		// The watch has not read the object yet, as after a restart, a
+		// failover, or a change to the hold, so the condition stays as it
+		// was: a restart during a rollout neither releases the hold nor
+		// starts its maxDuration again, and a hold that did not stand
+		// writes no status and posts no Event until the watch reads the
+		// object. A condition that already says the object is unreadable
+		// takes the latest reason it is. The maxDuration still ends a
+		// hold the watch never reads.
 		if holding && c.expired(previous.LastTransitionTime, maxDuration) {
 			condition.Reason = reasonExpired
 			condition.Message = fmt.Sprintf("the checks alert, because the hold reached its maxDuration of %s; the next hold starts after the condition stops matching and matches again", hold.MaxDuration)
