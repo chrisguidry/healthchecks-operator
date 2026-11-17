@@ -50,3 +50,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: make e2e
+
+  # The one check that main requires. It fails unless every job it needs
+  # succeeded, so a job added to or renamed in this workflow counts
+  # without a change to the ruleset.
+  all-checks-passed:
+    name: All checks passed
+    if: ${{ always() }}
+    needs: [go, e2e]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 1
+    steps:
+      - name: Fail unless every needed job succeeded
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: exit 1
