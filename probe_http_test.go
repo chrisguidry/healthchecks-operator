@@ -33,6 +33,9 @@ func (target *probeTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "Welcome to example.com")
 	case "/moved":
 		http.Redirect(w, r, "https://example.com/", http.StatusMovedPermanently)
+	case "/tagged":
+		w.Header().Add("X-Tag", "first")
+		w.Header().Add("X-Tag", "second")
 	case "/sign-in":
 		http.Redirect(w, r, "/echo", http.StatusFound)
 	case "/absolute":
@@ -185,6 +188,16 @@ func TestHTTPProbeResults(t *testing.T) {
 			[]HTTPRequest{{URL: "{http}/", Expect: ResponseExpectation{
 				Headers: map[string]string{"Location": "https://example.com/"}}}},
 			`{http}/: header Location is missing, want "https://example.com/"`},
+		{"header repeated, the expected value is the second",
+			[]HTTPRequest{{URL: "{http}/tagged", Expect: ResponseExpectation{
+				Headers: map[string]string{"x-tag": "second"}}}}, ""},
+		{"header repeated, the expected value is the first",
+			[]HTTPRequest{{URL: "{http}/tagged", Expect: ResponseExpectation{
+				Headers: map[string]string{"X-Tag": "first"}}}}, ""},
+		{"header repeated, the expected value is neither",
+			[]HTTPRequest{{URL: "{http}/tagged", Expect: ResponseExpectation{
+				Headers: map[string]string{"X-Tag": "third"}}}},
+			`{http}/tagged: header X-Tag has values "first", "second", want "third"`},
 		{"body contains the text",
 			[]HTTPRequest{{URL: "{http}/", Expect: ResponseExpectation{BodyContains: "Welcome"}}}, ""},
 		{"body lacks the text",

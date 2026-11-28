@@ -13,14 +13,16 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // probeTimeout bounds one HTTP request, body included, or one TLS
-// handshake. A target that stops answering fails the probe after this
-// long, and it cannot hold a run past the next interval, which is at
-// least a minute.
+// handshake, so a target that stops answering fails that request instead
+// of hanging it. It does not bound a run: a Check's requests go one
+// after another, each with its own timeout, so several slow requests can
+// take longer than a short interval.
 const probeTimeout = 10 * time.Second
 
 // bodyLimit is how much of a response body the probe reads to look for
@@ -246,14 +248,28 @@ func (p *httpProber) compare(resp *http.Response, expect ResponseExpectation) st
 		got := resp.Header.Values(name)
 		if len(got) == 0 {
 			problems = append(problems, fmt.Sprintf("header %s is missing, want %q", name, want))
-		} else if got[0] != want {
-			problems = append(problems, fmt.Sprintf("header %s is %q, want %q", name, got[0], want))
+		} else if !slices.Contains(got, want) {
+			problems = append(problems, fmt.Sprintf("header %s %s, want %q", name, seenValues(got), want))
 		}
 	}
 	if problem := p.compareBody(resp, expect.BodyContains); problem != "" {
 		problems = append(problems, problem)
 	}
 	return strings.Join(problems, "; ")
+}
+
+// seenValues describes the values a response sent for one header. A
+// header that appears more than once passes when any value matches, so a
+// reason lists all of them.
+func seenValues(values []string) string {
+	if len(values) == 1 {
+		return fmt.Sprintf("is %q", values[0])
+	}
+	quoted := make([]string, len(values))
+	for i, value := range values {
+		quoted[i] = strconv.Quote(value)
+	}
+	return "has values " + strings.Join(quoted, ", ")
 }
 
 // compareBody returns what is wrong with the body, or an empty string
